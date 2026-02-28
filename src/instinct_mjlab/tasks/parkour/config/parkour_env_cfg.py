@@ -1052,10 +1052,10 @@ def set_parkour_terminations(cfg: ManagerBasedRlEnvCfg) -> None:
       func=envs_mdp.bad_orientation,
       params={"limit_angle": 1.0},
     ),
-    # "root_height": TerminationTermCfg(
-    #   func=parkour_mdp.root_height_below_env_origin_minimum,
-    #   params={"minimum_height": 0.5},
-    # ),
+    "root_height": TerminationTermCfg(
+      func=parkour_mdp.root_height_below_env_origin_minimum,
+      params={"minimum_height": 0.5},
+    ),
   }
 
 
