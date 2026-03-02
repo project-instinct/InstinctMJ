@@ -3,20 +3,87 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import torch
+from prettytable import PrettyTable
 
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.managers import RewardTermCfg
+from mjlab.sim import Simulation
 from mjlab.utils.logging import print_info
 from mjlab.viewer.debug_visualizer import DebugVisualizer
+from mjlab.viewer.offscreen_renderer import OffscreenRenderer
 
 from instinct_mjlab.managers import MultiRewardCfg, MultiRewardManager
 from instinct_mjlab.monitors import MonitorManager
+from instinct_mjlab.envs.scene import InstinctScene
 
 
 class InstinctRlEnv(ManagerBasedRlEnv):
   """This class adds additional logging mechanism on sensors to get more
   comprehensive running statistics.
   """
+
+  def __init__(
+    self,
+    cfg,
+    device: str,
+    render_mode: str | None = None,
+    **kwargs,
+  ) -> None:
+    del kwargs  # Unused.
+    self.cfg = cfg
+    if self.cfg.seed is not None:
+      self.cfg.seed = self.seed(self.cfg.seed)
+    self._sim_step_counter = 0
+    self.extras = {}
+    self.obs_buf = {}
+
+    # Use InstinctScene so terrain cfg.class_type is honored (e.g. hacked_generator importer).
+    self.scene = InstinctScene(self.cfg.scene, device=device)
+    self.sim = Simulation(
+      num_envs=self.scene.num_envs,
+      cfg=self.cfg.sim,
+      model=self.scene.compile(),
+      device=device,
+    )
+
+    self.scene.initialize(
+      mj_model=self.sim.mj_model,
+      model=self.sim.model,
+      data=self.sim.data,
+    )
+    if self.scene.sensor_context is not None:
+      self.sim.set_sensor_context(self.scene.sensor_context)
+
+    print_info("")
+    table = PrettyTable()
+    table.title = "Base Environment"
+    table.field_names = ["Property", "Value"]
+    table.align["Property"] = "l"
+    table.align["Value"] = "l"
+    table.add_row(["Number of environments", self.num_envs])
+    table.add_row(["Environment device", self.device])
+    table.add_row(["Environment seed", self.cfg.seed])
+    table.add_row(["Physics step-size", self.physics_dt])
+    table.add_row(["Environment step-size", self.step_dt])
+    print_info(table.get_string())
+    print_info("")
+
+    self.common_step_counter = 0
+    self.episode_length_buf = torch.zeros(
+      cfg.scene.num_envs, device=device, dtype=torch.long
+    )
+    self.render_mode = render_mode
+    self._offline_renderer: OffscreenRenderer | None = None
+    if self.render_mode == "rgb_array":
+      renderer = OffscreenRenderer(
+        model=self.sim.mj_model, cfg=self.cfg.viewer, scene=self.scene
+      )
+      renderer.initialize()
+      self._offline_renderer = renderer
+    self.metadata["render_fps"] = 1.0 / self.step_dt
+
+    self.load_managers()
+    self.setup_manager_visualizers()
 
   def load_managers(self) -> None:
     # Route Instinct tasks through MultiRewardManager so reward logging matches

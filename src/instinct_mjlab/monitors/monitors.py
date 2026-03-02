@@ -420,12 +420,9 @@ class ShadowingPositionMonitorTerm(MonitorTerm):
         self._num_frames_should_reach += in_frame_mask.to(torch.int)
 
     def reset_idx(self, env_ids: Sequence[int] | slice):
-        frame_counts = self._num_frames_should_reach[env_ids]
-        safe_frame_counts = torch.clamp(frame_counts.to(dtype=torch.float32), min=1.0)
-        valid_frame_mask = (frame_counts > 0).to(dtype=torch.float32)
-        self._episodic_base_pos_error = (self._base_pos_error[env_ids] / safe_frame_counts) * valid_frame_mask
-        self._episodic_base_pos_error_xy = (self._base_pos_error_xy[env_ids] / safe_frame_counts) * valid_frame_mask
-        self._episodic_base_pos_error_z = (self._base_pos_error_z[env_ids] / safe_frame_counts) * valid_frame_mask
+        self._episodic_base_pos_error = self._base_pos_error[env_ids] / self._num_frames_should_reach[env_ids]
+        self._episodic_base_pos_error_xy = self._base_pos_error_xy[env_ids] / self._num_frames_should_reach[env_ids]
+        self._episodic_base_pos_error_z = self._base_pos_error_z[env_ids] / self._num_frames_should_reach[env_ids]
         self._episodic_base_pos_error_z_max = self._base_pos_error_z_max[env_ids].clone()
 
         self._base_pos_error[env_ids] = 0.0
@@ -443,16 +440,11 @@ class ShadowingPositionMonitorTerm(MonitorTerm):
                 "base_pos_error_z_max": self._episodic_base_pos_error_z_max.max().item(),
             }
         else:
-            safe_frame_counts = torch.clamp(self._num_frames_should_reach.to(dtype=torch.float32), min=1.0)
-            valid_frame_mask = (self._num_frames_should_reach > 0).to(dtype=torch.float32)
-            base_pos_error = (self._base_pos_error / safe_frame_counts) * valid_frame_mask
-            base_pos_error_xy = (self._base_pos_error_xy / safe_frame_counts) * valid_frame_mask
-            base_pos_error_z = (self._base_pos_error_z / safe_frame_counts) * valid_frame_mask
             return {
-                "base_pos_error": base_pos_error.nanmean().item(),
+                "base_pos_error": (self._base_pos_error / self._num_frames_should_reach).nanmean().item(),
                 "base_pos_error_currently": self._base_pos_error_currently.nanmean().item(),
-                "base_pos_error_xy": base_pos_error_xy.nanmean().item(),
-                "base_pos_error_z": base_pos_error_z.nanmean().item(),
+                "base_pos_error_xy": (self._base_pos_error_xy / self._num_frames_should_reach).nanmean().item(),
+                "base_pos_error_z": (self._base_pos_error_z / self._num_frames_should_reach).nanmean().item(),
                 "base_pos_error_z_max": self._base_pos_error_z_max.max().item(),
             }
 

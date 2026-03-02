@@ -19,7 +19,6 @@ import instinct_mjlab.envs.mdp as instinct_mdp
 import instinct_mjlab.tasks.shadowing.mdp as shadowing_mdp
 import instinct_mjlab.tasks.shadowing.perceptive.perceptive_env_cfg as perceptual_cfg
 from instinct_mjlab.assets.unitree_g1 import (
-    G1_29DOF_INSTINCTLAB_JOINT_ORDER,
     G1_29DOF_TORSOBASE_POPSICLE_CFG,
     G1_29Dof_TorsoBase_symmetric_augmentation_joint_mapping,
     G1_29Dof_TorsoBase_symmetric_augmentation_joint_reverse_buf,
@@ -161,11 +160,7 @@ def make_vae_observations() -> dict[str, ObsGroupCfg]:
         "joint_pos": ObsTermCfg(
             func=mdp.joint_pos_rel,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                "asset_cfg": SceneEntityCfg("robot"),
             },
             noise=UniformNoiseCfg(n_min=-0.01, n_max=0.01),
             history_length=PROPRIO_HISTORY_LENGTH,
@@ -173,11 +168,7 @@ def make_vae_observations() -> dict[str, ObsGroupCfg]:
         "joint_vel": ObsTermCfg(
             func=mdp.joint_vel_rel,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                "asset_cfg": SceneEntityCfg("robot"),
             },
             noise=UniformNoiseCfg(n_min=-0.5, n_max=0.5),
             history_length=PROPRIO_HISTORY_LENGTH,
@@ -222,11 +213,7 @@ def make_vae_observations() -> dict[str, ObsGroupCfg]:
         "joint_pos": ObsTermCfg(
             func=mdp.joint_pos_rel,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                "asset_cfg": SceneEntityCfg("robot"),
             },
             noise=UniformNoiseCfg(n_min=-0.01, n_max=0.01),
             history_length=8,
@@ -234,11 +221,7 @@ def make_vae_observations() -> dict[str, ObsGroupCfg]:
         "joint_vel": ObsTermCfg(
             func=mdp.joint_vel_rel,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                "asset_cfg": SceneEntityCfg("robot"),
             },
             noise=UniformNoiseCfg(n_min=-0.5, n_max=0.5),
             history_length=8,

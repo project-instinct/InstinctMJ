@@ -26,7 +26,6 @@ from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 from mjlab.utils.noise import UniformNoiseCfg
 
 import instinct_mjlab.envs.mdp as instinct_mdp
-from instinct_mjlab.assets.unitree_g1 import G1_29DOF_INSTINCTLAB_JOINT_ORDER
 from instinct_mjlab.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
 from instinct_mjlab.monitors import (
     MonitorTermCfg,
@@ -407,16 +406,12 @@ def make_perceptive_commands() -> dict[str, instinct_mdp.ShadowingCommandBaseCfg
             current_state_command=False,
             asset_cfg=SceneEntityCfg(
                 "robot",
-                joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                preserve_order=True,
             ),
         ),
         "joint_vel_ref_command": instinct_mdp.JointVelRefCommandCfg(
             current_state_command=False,
             asset_cfg=SceneEntityCfg(
                 "robot",
-                joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                preserve_order=True,
             ),
         ),
     }
@@ -428,8 +423,7 @@ def make_actions() -> dict[str, mdp.JointPositionActionCfg]:
     return {
         "joint_pos": mdp.JointPositionActionCfg(
             entity_name="robot",
-            actuator_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-            preserve_order=True,
+            actuator_names=(".*",),
             scale=0.5,
         ),
     }
@@ -481,11 +475,7 @@ def make_observations() -> dict[str, ObsGroupCfg]:
         "joint_pos": ObsTermCfg(
             func=mdp.joint_pos_rel,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                "asset_cfg": SceneEntityCfg("robot"),
             },
             noise=UniformNoiseCfg(n_min=-0.01, n_max=0.01),
             history_length=PROPRIO_HISTORY_LENGTH,
@@ -493,11 +483,7 @@ def make_observations() -> dict[str, ObsGroupCfg]:
         "joint_vel": ObsTermCfg(
             func=mdp.joint_vel_rel,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                "asset_cfg": SceneEntityCfg("robot"),
             },
             noise=UniformNoiseCfg(n_min=-0.5, n_max=0.5),
             history_length=PROPRIO_HISTORY_LENGTH,
@@ -542,22 +528,14 @@ def make_observations() -> dict[str, ObsGroupCfg]:
         "joint_pos": ObsTermCfg(
             func=mdp.joint_pos_rel,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                "asset_cfg": SceneEntityCfg("robot"),
             },
             history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "joint_vel": ObsTermCfg(
             func=mdp.joint_vel_rel,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                "asset_cfg": SceneEntityCfg("robot"),
             },
             history_length=PROPRIO_HISTORY_LENGTH,
         ),
@@ -791,7 +769,7 @@ def make_events() -> dict[str, EventTermCfg]:
                 "randomize_pose_range": {
                     "x": (-0.15, 0.15),
                     "y": (-0.15, 0.15),
-                    "z": (-0.0, 0.0),
+                    "z": (-0.01, 0.01),
                 },
                 # Velocity randomization (+-0.1 m/s linear, +-0.1 rad/s angular)
                 "randomize_velocity_range": {},
@@ -955,16 +933,8 @@ def make_monitors() -> dict[str, MonitorTermCfg]:
         "shadowing_joint_pos": MonitorTermCfg(
             func=ShadowingJointPosMonitorTerm,
             params=dict(
-                robot_cfg=SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
-                motion_reference_cfg=SceneEntityCfg(
-                    "motion_reference",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                robot_cfg=SceneEntityCfg("robot"),
+                motion_reference_cfg=SceneEntityCfg("motion_reference"),
                 masking=True,
             ),
         ),
@@ -972,16 +942,8 @@ def make_monitors() -> dict[str, MonitorTermCfg]:
         "shadowing_joint_vel": MonitorTermCfg(
             func=ShadowingJointVelMonitorTerm,
             params=dict(
-                robot_cfg=SceneEntityCfg(
-                    "robot",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
-                motion_reference_cfg=SceneEntityCfg(
-                    "motion_reference",
-                    joint_names=list(G1_29DOF_INSTINCTLAB_JOINT_ORDER),
-                    preserve_order=True,
-                ),
+                robot_cfg=SceneEntityCfg("robot"),
+                motion_reference_cfg=SceneEntityCfg("motion_reference"),
                 masking=True,
             ),
         ),
@@ -1029,5 +991,9 @@ class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
         self.episode_length_s = 10.0
         # simulation settings
         self.sim.mujoco.timestep = 1.0 / 50.0 / self.decimation
+        # Use task-level solver caps consistent with mjlab examples instead of
+        # relying on MujocoCfg global defaults (100/50).
+        self.sim.mujoco.iterations = 10
+        self.sim.mujoco.ls_iterations = 20
         self.sim.nconmax = 128
         self.sim.njmax = 512

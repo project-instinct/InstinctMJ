@@ -74,8 +74,11 @@ class NoisyCameraMixin:  # as a subclass of SensorBase
         if self.noise_pipeline is None:
             raise RuntimeError("Noise sequence not built. Call build_noise_pipeline() first.")
 
+        # Keep noised output decoupled when no noise op is configured.
+        if len(self.noise_pipeline) == 0:
+            return data.clone()
+
         # Apply noise to the image by calling the noise pipeline one by one.
-        data = data.clone()
         for noise_cfg in self.noise_pipeline:
             data = noise_cfg.func(data, noise_cfg, env_ids)  # type: ignore
 

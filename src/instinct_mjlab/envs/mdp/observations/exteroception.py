@@ -118,7 +118,7 @@ def visualizable_image(
     )
 
     # obtain the input image
-    images = sensor.data.output[data_type].clone()  # (N, H, W, C) or (N, history, H, W, C)
+    images = sensor.data.output[data_type]  # (N, H, W, C) or (N, history, H, W, C)
     if "history" in data_type:
         # NOTE: Only depth-related data types with history are supported. where C = 1.
         images = images.squeeze(
@@ -231,7 +231,7 @@ class delayed_visualizable_image(ManagerTermBase):
         Get the delayed frames from the sensor data.
         """
         # obtain the input image
-        images = self.sensor.data.output[self.data_type].clone()  # (N, history, H, W, C)
+        images = self.sensor.data.output[self.data_type]  # (N, history, H, W, C)
         # NOTE: Only depth-related data types with history are supported for now. where C = 1.
         images = images.squeeze(
             -1

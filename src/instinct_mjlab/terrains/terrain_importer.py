@@ -165,8 +165,12 @@ class TerrainImporter(TerrainImporterBase):
     """
 
     def import_ground_plane(self, name: str):
-        """Import ground plane via mjlab base implementation."""
-        return super().import_ground_plane(name)
+        """Import a flat MuJoCo plane terrain."""
+        self._spec.worldbody.add_body(name=name).add_geom(
+            name=name,
+            type=mujoco.mjtGeom.mjGEOM_PLANE,
+            size=(0, 0, 0.01),
+        )
 
     def _get_terrain_mesh_for_virtual_obstacles(self) -> trimesh.Trimesh | None:
         if self.terrain_generator is None:

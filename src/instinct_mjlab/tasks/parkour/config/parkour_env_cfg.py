@@ -1216,7 +1216,7 @@ def set_parkour_basic_settings(cfg: ManagerBasedRlEnvCfg) -> None:
 
   Mirrors the original InstinctLab ``ParkourEnvCfg.__post_init__`` settings.
   """
-  cfg.scene.num_envs = 1024 * 3
+  cfg.scene.num_envs = 1024 * 2
   cfg.scene.env_spacing = 2.5
   cfg.episode_length_s = 20.0
   # Parkour introduces many simultaneous terrain contacts; fixed small caps from
@@ -1227,9 +1227,12 @@ def set_parkour_basic_settings(cfg: ManagerBasedRlEnvCfg) -> None:
   # keeping enough headroom for rough-terrain foot contacts.
   cfg.sim.nconmax = 128
   cfg.sim.njmax = 700
+  # Keep solver iterations aligned with mjlab task examples and tracking base.
+  cfg.sim.mujoco.iterations = 10
+  cfg.sim.mujoco.ls_iterations = 20
   # Increase CCD robustness on dense hfield contacts.
   cfg.sim.mujoco.ccd_iterations = 128
-  cfg.sim.mujoco.multiccd = True
+  cfg.sim.mujoco.multiccd = False
 
 
 # ---------------------------------------------------------------------------

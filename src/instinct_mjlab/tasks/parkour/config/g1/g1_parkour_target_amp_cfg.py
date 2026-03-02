@@ -231,7 +231,7 @@ def _set_parkour_actuators(cfg: ManagerBasedRlEnvCfg) -> None:
   """Set G1-specific actuators and action scale for parkour (in-place).
 
   Mirrors the original InstinctLab ``G1ParkourRoughEnvCfg.__post_init__``
-  where ``beyondmimic_g1_29dof_delayed_actuators`` and
+  where ``beyondmimic_g1_29dof_delayed_actuator_cfgs`` and
   ``beyondmimic_action_scale`` are applied.
   """
   robot_cfg = cfg.scene.entities["robot"]

@@ -1,5 +1,7 @@
 # Training/runtime logs
 logs/
+log/
+*.log
 .venv/
 .vscode/
 .pytest_cache/

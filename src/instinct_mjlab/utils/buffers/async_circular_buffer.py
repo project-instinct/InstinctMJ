@@ -1,6 +1,5 @@
 import torch
 from collections.abc import Sequence
-from typing import Union
 
 from mjlab.utils.buffers import CircularBuffer
 
@@ -17,11 +16,18 @@ class AsyncCircularBuffer(CircularBuffer):
 
     def get_by_batch_ids(self, batch_ids: Sequence[int] | None = None) -> torch.Tensor:
         # Index seems too large, potentially needing speed optimization. But we may wait and see.
-        batch_ids = self._all_indices if batch_ids is None else torch.as_tensor(batch_ids, device=self._device)
+        assert self._buffer is not None
+        if batch_ids is None:
+            batch_ids = self._all_indices
+            selected_buf = self._buffer
+            selected_batch_size = self._batch_size
+        else:
+            batch_ids = torch.as_tensor(batch_ids, device=self._device)
+            selected_buf = self._buffer[:, batch_ids, ...]
+            selected_batch_size = batch_ids.size(0)
+
         shifts = self.max_length - self._pointer - 1
-        selected_shifts = shifts if batch_ids is None else shifts[batch_ids]
-        selected_buf = self._buffer.clone() if batch_ids is None else self._buffer[:, batch_ids, ...].clone()
-        selected_batch_size = self._batch_size if batch_ids is None else batch_ids.size(0)
+        selected_shifts = shifts[batch_ids]
         T = self.max_length
         arange = torch.arange(T, device=self._device)  # (T,)
         index = ((arange[:, None] - selected_shifts[None, :]) % T).long()  # (T, 1) - (1, selected_B) -> (T, selected_B)

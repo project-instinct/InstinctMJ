@@ -7,23 +7,11 @@ from mjlab.managers import SceneEntityCfg
 from mjlab.sensor import ContactSensor, RayCastSensor
 from mjlab.utils.lab_api.math import quat_apply_inverse
 
-from instinct_mjlab.assets.unitree_g1 import G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT
-
 if TYPE_CHECKING:
   from mjlab.entity import Entity
   from mjlab.envs import ManagerBasedRlEnv
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
-
-_G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT = dict(G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT)
-
-
-def _g1_velocity_limit_from_effort_limit(effort_limit: float) -> float:
-  return next(
-    velocity_limit
-    for effort_limit_key, velocity_limit in _G1_JOINT_VEL_LIMIT_BY_EFFORT_LIMIT.items()
-    if abs(effort_limit - effort_limit_key) < 1e-6
-  )
 
 
 def track_lin_vel_xy_exp(
@@ -375,26 +363,16 @@ def joint_vel_limits(
 
   Mirrors the original Isaac Lab ``joint_vel_limits``:
   ``abs(joint_vel) - soft_joint_vel_limits * soft_ratio`` clipped to [0, 1].
-  In mjlab parkour G1, per-joint velocity limits are reconstructed from
-  actuator effort limits using the same Unitree motor specs.
+  In mjlab parkour G1, per-joint velocity limits are read directly from
+  actuator cfg metadata (``velocity_limit``).
   """
   asset: Entity = env.scene[asset_cfg.name]
 
   joint_vel_limits = torch.zeros_like(asset.data.joint_vel)
-  selected_joint_ids = (
-    list(range(asset.num_joints))
-    if isinstance(asset_cfg.joint_ids, slice)
-    else list(asset_cfg.joint_ids)
-  )
-  is_joint_covered = torch.zeros(asset.num_joints, dtype=torch.bool, device=env.device)
-
   for actuator in asset.actuators:
     base_actuator = actuator.base_actuator
     target_ids = base_actuator.target_ids
-    effort_limit = float(base_actuator.cfg.effort_limit)
-    velocity_limit = _g1_velocity_limit_from_effort_limit(effort_limit)
-    joint_vel_limits[:, target_ids] = velocity_limit
-    is_joint_covered[target_ids] = True
+    joint_vel_limits[:, target_ids] = float(base_actuator.cfg.velocity_limit)
 
   out_of_limits = (
     torch.abs(asset.data.joint_vel[:, asset_cfg.joint_ids])

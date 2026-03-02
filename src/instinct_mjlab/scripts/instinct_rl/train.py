@@ -247,6 +247,8 @@ def _resolve_device(cfg: TrainConfig) -> str:
 
 
 def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
+  log_dir = log_dir.expanduser().resolve()
+
   if InstinctRlVecEnvWrapper is None:
     raise ImportError(
       "InstinctRlVecEnvWrapper is unavailable. Please install runtime deps:\n"

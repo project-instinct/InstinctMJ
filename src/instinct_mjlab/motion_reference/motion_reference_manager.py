@@ -98,12 +98,15 @@ class MotionReferenceManager(Sensor):
         self._is_initialized = True
 
     def update(self, dt: float) -> None:
-        """Advance motion-reference clock and update stale env buffers."""
+        """Advance motion-reference clock.
+
+        Keep motion buffer refresh lazy (triggered by data access) to match
+        InstinctLab timing semantics for keyframe-threshold terms.
+        """
         super().update(dt)
         if not self._is_initialized or not hasattr(self, "_timestamp"):
             return
         self._timestamp += dt
-        self._update_outdated_buffers()
 
     def _compute_data(self) -> MotionReferenceData:
         """Return the motion reference data (mjlab Sensor cache interface)."""
@@ -119,18 +122,18 @@ class MotionReferenceManager(Sensor):
         if not self._is_initialized or not hasattr(self, "_timestamp"):
             return
 
-        # 1) Always refresh envs that have not produced data after init/reset.
-        outdated_mask = torch.logical_not(self._has_valid_data)
+        # 1) Always refresh envs marked outdated (initially or after reset).
+        outdated_mask = self._is_outdated.clone()
 
         # 2) Refresh envs that reached their per-env update period.
-        elapsed = self._timestamp - self._timestamp_last_update
+        elapsed = self._timestamp - self._data_timestamp_last_update
         if isinstance(self.cfg.update_period, torch.Tensor):
             update_period = self.cfg.update_period.to(device=self.device)
             outdated_mask = torch.logical_or(outdated_mask, elapsed >= (update_period - 1e-6))
         else:
             update_period = float(self.cfg.update_period)
             if update_period <= 0.0:
-                outdated_mask = torch.logical_or(outdated_mask, self._timestamp > self._timestamp_last_update)
+                outdated_mask = torch.logical_or(outdated_mask, self._timestamp > self._data_timestamp_last_update)
             else:
                 outdated_mask = torch.logical_or(outdated_mask, elapsed >= (update_period - 1e-6))
 
@@ -139,8 +142,10 @@ class MotionReferenceManager(Sensor):
 
         env_ids = self._ALL_INDICES[outdated_mask]
         self._update_buffers_impl(env_ids)
-        self._timestamp_last_update[env_ids] = self._timestamp[env_ids]
-        self._has_valid_data[env_ids] = True
+        # Data refresh clock: only tracks when _data was last refilled.
+        # Keep _timestamp_last_update as keyframe logical clock.
+        self._data_timestamp_last_update[env_ids] = self._timestamp[env_ids]
+        self._is_outdated[env_ids] = False
 
     """
     Properties
@@ -410,7 +415,8 @@ class MotionReferenceManager(Sensor):
         # Reset per-env timeline state. The next data query/update will refill references at t=0.
         self._timestamp[env_ids] = 0.0
         self._timestamp_last_update[env_ids] = 0.0
-        self._has_valid_data[env_ids] = False
+        self._data_timestamp_last_update[env_ids] = 0.0
+        self._is_outdated[env_ids] = True
         self._reference_frame_timestamp[env_ids] = 0.0
 
     def find_joints(
@@ -619,14 +625,6 @@ class MotionReferenceManager(Sensor):
         # set invalid timestamp data to invalid value.
         self._data.time_to_target_frame[self._data.validity == 0] = -1.0
 
-        # Keep the optional robot reference entity synchronized on regular buffer updates.
-        # This avoids a one-frame default spawn at world origin before visual callbacks run.
-        if self.cfg.reference_entity_name is not None:
-            if not hasattr(self, "_reference_entity"):
-                self._find_reference_view()
-            if hasattr(self, "_reference_entity"):
-                self._set_reference_view_state()
-
     """
     Manager's internal operations.
     """
@@ -672,8 +670,11 @@ class MotionReferenceManager(Sensor):
 
         # Timestamp tracking.
         self._timestamp = torch.zeros(self._num_envs, device=self.device)
+        # Keyframe logical clock.
         self._timestamp_last_update = torch.zeros(self._num_envs, device=self.device)
-        self._has_valid_data = torch.zeros(self._num_envs, dtype=torch.bool, device=self.device)
+        # Data refresh clock (used by lazy buffer refresh checks).
+        self._data_timestamp_last_update = torch.zeros(self._num_envs, device=self.device)
+        self._is_outdated = torch.ones(self._num_envs, dtype=torch.bool, device=self.device)
 
         self._init_reference_state = MotionReferenceState.make_empty(
             self._num_envs,
@@ -1065,18 +1066,15 @@ class MotionReferenceManager(Sensor):
 
     def _set_reference_view_state(self):
         """Set the articulation view to the reference state for motion visualization."""
-        # NOTE: Use self._data directly instead of self.data property to avoid
-        # infinite recursion: data property -> _update_outdated_buffers ->
-        # _update_buffers_impl -> _set_reference_view_state -> self.data -> ...
         if self.cfg.visualizing_robot_from == "aiming_frame":
             aiming_frame_idx = self.aiming_frame_idx
-            robot_pos_w = self._data.base_pos_w[self.ALL_INDICES, aiming_frame_idx].clone()
-            robot_quat_w = self._data.base_quat_w[self.ALL_INDICES, aiming_frame_idx]
-            robot_joint_pos = self._data.joint_pos[self.ALL_INDICES, aiming_frame_idx]
+            robot_pos_w = self.data.base_pos_w[self.ALL_INDICES, aiming_frame_idx].clone()
+            robot_quat_w = self.data.base_quat_w[self.ALL_INDICES, aiming_frame_idx]
+            robot_joint_pos = self.data.joint_pos[self.ALL_INDICES, aiming_frame_idx]
         elif self.cfg.visualizing_robot_from == "reference_frame":
             robot_pos_w = self.reference_frame.base_pos_w[self.ALL_INDICES, 0].clone()
             robot_quat_w = self.reference_frame.base_quat_w[self.ALL_INDICES, 0]
-            robot_joint_pos = self._data.joint_pos[self.ALL_INDICES, 0]
+            robot_joint_pos = self.data.joint_pos[self.ALL_INDICES, 0]
         else:
             raise ValueError(f"Unsupported cfg.visualizing_robot_from: {self.cfg.visualizing_robot_from}")
 
