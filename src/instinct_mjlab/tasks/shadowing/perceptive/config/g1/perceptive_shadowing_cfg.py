@@ -128,6 +128,7 @@ motion_reference_cfg = MotionReferenceManagerCfg(
 
 def _make_motion_reference_cfg(*, debug_vis: bool = False) -> MotionReferenceManagerCfg:
     cfg = deepcopy(motion_reference_cfg)
+    cfg.debug_vis = debug_vis
     cfg.reference_entity_name = "robot_reference" if debug_vis else None
     return cfg
 

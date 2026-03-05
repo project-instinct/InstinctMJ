@@ -55,8 +55,6 @@ def _set_coacd_log_level(level: str) -> None:
     level = str(level)
     if _COACD_LOG_LEVEL_SET == level:
         return
-    if not hasattr(coacd, "set_log_level"):
-        return
     coacd.set_log_level(level)
     _COACD_LOG_LEVEL_SET = level
 
@@ -1074,7 +1072,7 @@ def _add_collision_hfield_from_mesh(
 
     # 3. Compute via ray-casting.
     if height is None:
-        raycast_backend = str(getattr(cfg, "collision_hfield_raycast_backend", "cpu"))
+        raycast_backend = str(cfg.collision_hfield_raycast_backend)
         if raycast_backend not in ("cpu", "gpu"):
             raise ValueError(
                 "collision_hfield_raycast_backend must be 'cpu' or 'gpu'. "
@@ -1082,8 +1080,8 @@ def _add_collision_hfield_from_mesh(
             )
 
         if raycast_backend == "gpu":
-            gpu_device = str(getattr(cfg, "collision_hfield_gpu_device", "cuda"))
-            gpu_batch_size = int(getattr(cfg, "collision_hfield_gpu_batch_size", 262144))
+            gpu_device = str(cfg.collision_hfield_gpu_device)
+            gpu_batch_size = int(cfg.collision_hfield_gpu_batch_size)
             raw = _raycast_hfield_gpu(
                 terrain_mesh=terrain_mesh,
                 ray_origins=ray_origins,
@@ -1110,7 +1108,7 @@ def _add_collision_hfield_from_mesh(
             hit_z_min = mesh_z_min
             hit_z_max = mesh_z_min
 
-        sink_miss_cells = bool(getattr(cfg, "collision_hfield_sink_miss_cells", True))
+        sink_miss_cells = bool(cfg.collision_hfield_sink_miss_cells)
         if sink_miss_cells:
             # Motion-matched terrain may intentionally contain out-of-mesh areas:
             # keep old behavior and sink misses deep below the surface.
@@ -1135,12 +1133,12 @@ def _add_collision_hfield_from_mesh(
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-    stitch_edges = bool(getattr(cfg, "collision_hfield_stitch_edges", False))
-    stitch_border_pixels = int(getattr(cfg, "collision_hfield_stitch_border_pixels", 0))
+    stitch_edges = bool(cfg.collision_hfield_stitch_edges)
+    stitch_border_pixels = int(cfg.collision_hfield_stitch_border_pixels)
     if stitch_edges and stitch_border_pixels > 0:
         max_border = min(nrow // 2, ncol // 2)
         stitch_border_pixels = max(1, min(stitch_border_pixels, max_border))
-        stitch_height = getattr(cfg, "collision_hfield_stitch_height", None)
+        stitch_height = cfg.collision_hfield_stitch_height
         if stitch_height is None:
             edge_values = np.concatenate([
                 height[:stitch_border_pixels, :].reshape(-1),
@@ -1303,7 +1301,7 @@ def _create_visual_hfield_from_mesh(
             hit_z_min = mesh_z_min
             hit_z_max = mesh_z_min
 
-        sink_miss_cells = bool(getattr(cfg, "hfield_sink_miss_cells", True))
+        sink_miss_cells = bool(cfg.hfield_sink_miss_cells)
         if sink_miss_cells:
             terrain_height_range = max(hit_z_max - hit_z_min, 1.0)
             sink_depth = terrain_height_range * 10.0

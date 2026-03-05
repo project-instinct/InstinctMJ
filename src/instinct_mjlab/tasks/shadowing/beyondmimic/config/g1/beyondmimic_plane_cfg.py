@@ -100,6 +100,7 @@ def _make_motion_reference_cfg(*, debug_vis: bool) -> MotionReferenceManagerCfg:
         name="motion_reference",
         entity_name="robot",
         robot_model_path=G1_MJCF_PATH,
+        debug_vis=debug_vis,
         reference_entity_name="robot_reference" if debug_vis else None,
         link_of_interests=[
             "pelvis",

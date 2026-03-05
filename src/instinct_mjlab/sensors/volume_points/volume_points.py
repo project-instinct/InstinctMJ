@@ -200,14 +200,13 @@ class VolumePoints(Sensor[VolumePointsData]):
         if not env_ids:
             return
 
-        marker_cfgs = getattr(self.cfg.visualizer_cfg, "markers", {})
-        sphere_cfg = marker_cfgs.get("sphere", None)
-        sphere_penetrated_cfg = marker_cfgs.get("sphere_penetrated", None)
-
-        normal_radius = float(getattr(sphere_cfg, "radius", 0.01))
-        normal_color = tuple(getattr(sphere_cfg, "color", (0.0, 1.0, 0.0, 1.0)))
-        penetrated_radius = float(getattr(sphere_penetrated_cfg, "radius", normal_radius))
-        penetrated_color = tuple(getattr(sphere_penetrated_cfg, "color", (1.0, 0.0, 0.0, 1.0)))
+        marker_cfgs = self.cfg.visualizer_cfg.markers
+        sphere_cfg = marker_cfgs["sphere"]
+        sphere_penetrated_cfg = marker_cfgs["sphere_penetrated"]
+        normal_radius = float(sphere_cfg.radius)
+        normal_color = tuple(sphere_cfg.color)
+        penetrated_radius = float(sphere_penetrated_cfg.radius)
+        penetrated_color = tuple(sphere_penetrated_cfg.color)
 
         points = self._sensor_data.points_pos_w[env_ids].reshape(-1, 3)
         penetrated = torch.norm(self._sensor_data.penetration_offset[env_ids].reshape(-1, 3), dim=-1) > 0.0

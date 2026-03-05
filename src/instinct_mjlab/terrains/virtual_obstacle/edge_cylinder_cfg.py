@@ -14,7 +14,7 @@ from .virtual_obstacle_base import VirtualObstacleCfg
 @dataclass
 class _PreviewSurfaceCfg:
     diffuse_color: tuple[float, float, float]
-    opacity: float | None = None
+    opacity: float = 1.0
 
 
 @dataclass
@@ -208,7 +208,7 @@ class RayEdgeCylinderCfg(VirtualObstacleCfg):
             markers={
                 "sphere": _SphereMarkerCfg(
                     radius=0.01,
-                    visual_material=_PreviewSurfaceCfg(diffuse_color=(0.0, 0.5, 0.5)),
+                    visual_material=_PreviewSurfaceCfg(diffuse_color=(0.0, 0.5, 0.5), opacity=1.0),
                 ),
             },
         )

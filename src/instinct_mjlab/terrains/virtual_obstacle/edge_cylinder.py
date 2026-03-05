@@ -32,14 +32,10 @@ if TYPE_CHECKING:
     )
 
 
-def _marker_rgba_from_cfg(marker_cfg, default_rgba: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
-    visual_material = getattr(marker_cfg, "visual_material", None)
-    if visual_material is None:
-        return default_rgba
-    diffuse = getattr(visual_material, "diffuse_color", default_rgba[:3])
-    opacity = getattr(visual_material, "opacity", default_rgba[3])
-    if opacity is None:
-        opacity = 1.0
+def _marker_rgba_from_cfg(marker_cfg) -> tuple[float, float, float, float]:
+    visual_material = marker_cfg.visual_material
+    diffuse = visual_material.diffuse_color
+    opacity = visual_material.opacity
     return (float(diffuse[0]), float(diffuse[1]), float(diffuse[2]), float(opacity))
 
 
@@ -47,8 +43,10 @@ class EdgeCylinder(VirtualObstacleBase):
     """Base class for edge detectors."""
 
     def __init__(self, cfg: EdgeCylinderCfg):
+        super().__init__(cfg)
         self.cfg: EdgeCylinderCfg = cfg
         self.angle_threshold = cfg.angle_threshold
+        self.supports_edge_segment_generation = True
 
     def _set_edge_cylinders(self, edge_end_points: np.ndarray, device="cpu") -> None:
         """Finalize edge tensors and spatial grid from edge endpoints."""
@@ -129,8 +127,8 @@ class EdgeCylinder(VirtualObstacleBase):
     def debug_vis(self, visualizer: "DebugVisualizer") -> None:
         if self.edges_pyt.numel() == 0:
             return
-        marker_cfg = self.cfg.visualizer.markers.get("cylinder", None)
-        rgba = _marker_rgba_from_cfg(marker_cfg, default_rgba=(0.0, 0.0, 0.9, 0.2))
+        marker_cfg = self.cfg.visualizer.markers["cylinder"]
+        rgba = _marker_rgba_from_cfg(marker_cfg)
         radius = float(self.cfg.cylinder_radius)
         for edge in self.edges_pyt:
             visualizer.add_cylinder(
@@ -156,8 +154,8 @@ class PluckerEdgeCylinder(EdgeCylinder):
     """Detects sharp edges in a mesh using the Laplacian operator."""
 
     def __init__(self, cfg: PluckerEdgeCylinderCfg):
+        super().__init__(cfg)
         self.cfg: PluckerEdgeCylinderCfg = cfg
-        self.angle_threshold = cfg.angle_threshold
 
     def process_edges(self, edge_coords: np.ndarray) -> np.ndarray:
         """Process the edge coordinates using Plücker coordinates.
@@ -251,8 +249,8 @@ class RansacEdgeCylinder(EdgeCylinder):
     """Detects sharp edges in a mesh using the Laplacian operator."""
 
     def __init__(self, cfg: RansacEdgeCylinderCfg):
+        super().__init__(cfg)
         self.cfg: RansacEdgeCylinderCfg = cfg
-        self.angle_threshold = cfg.angle_threshold
 
     def process_edges(self, edge_coords: np.ndarray) -> np.ndarray:
         """Process the edge coordinates using ransac.
@@ -298,8 +296,8 @@ class GreedyconcatEdgeCylinder(EdgeCylinder):
     """Detects sharp edges in a mesh using the Laplacian operator."""
 
     def __init__(self, cfg: GreedyconcatEdgeCylinderCfg):
+        super().__init__(cfg)
         self.cfg: GreedyconcatEdgeCylinderCfg = cfg
-        self.angle_threshold = cfg.angle_threshold
 
     @staticmethod
     def _try_merge_collinear_pair(
@@ -350,26 +348,24 @@ class GreedyconcatEdgeCylinder(EdgeCylinder):
 
     def _post_merge_collinear_segments(self, segments: np.ndarray) -> np.ndarray:
         """Merge fragmented collinear segments separated by small endpoint gaps."""
-        gap_threshold = float(getattr(self.cfg, "merge_collinear_gap", 0.0))
+        gap_threshold = float(self.cfg.merge_collinear_gap)
         if gap_threshold <= 0.0 or segments.shape[0] <= 1:
             return segments
-        max_segments = int(getattr(self.cfg, "merge_collinear_max_segments", 4000))
+        max_segments = int(self.cfg.merge_collinear_max_segments)
         if segments.shape[0] > max_segments:
             # Safety valve: keep startup/runtime bounded on dense terrain edge sets.
             return segments
 
-        angle_threshold = float(
-            getattr(self.cfg, "merge_collinear_angle_threshold", self.cfg.adjacent_angle_threshold)
-        )
+        angle_threshold = float(self.cfg.merge_collinear_angle_threshold)
         cos_threshold = np.cos(np.deg2rad(angle_threshold))
 
-        line_distance_threshold = getattr(self.cfg, "merge_collinear_line_distance", None)
+        line_distance_threshold = self.cfg.merge_collinear_line_distance
         if line_distance_threshold is None:
             line_distance_threshold = float(self.cfg.point_distance_threshold)
         else:
             line_distance_threshold = float(line_distance_threshold)
 
-        max_passes = max(int(getattr(self.cfg, "merge_collinear_max_passes", 3)), 1)
+        max_passes = max(int(self.cfg.merge_collinear_max_passes), 1)
         active_segments = [seg.astype(np.float64, copy=False) for seg in segments]
         for _ in range(max_passes):
             used = [False] * len(active_segments)
@@ -518,6 +514,7 @@ class RayEdgeCylinder(VirtualObstacleBase):
     """class for ray-based edge detectors."""
 
     def __init__(self, cfg: RayEdgeCylinderCfg):
+        super().__init__(cfg)
         self.cfg: RayEdgeCylinderCfg = cfg
 
     def generate(self, mesh: trimesh.Trimesh, device="cpu") -> None:
@@ -717,8 +714,8 @@ class RayEdgeCylinder(VirtualObstacleBase):
 
     def debug_vis(self, visualizer: "DebugVisualizer") -> None:
         if self.edges_pyt.numel() != 0:
-            cylinder_marker_cfg = self.cfg.visualizer.markers.get("cylinder", None)
-            cylinder_rgba = _marker_rgba_from_cfg(cylinder_marker_cfg, default_rgba=(0.0, 0.0, 0.9, 0.2))
+            cylinder_marker_cfg = self.cfg.visualizer.markers["cylinder"]
+            cylinder_rgba = _marker_rgba_from_cfg(cylinder_marker_cfg)
             radius = float(self.cfg.cylinder_radius)
             for edge in self.edges_pyt:
                 visualizer.add_cylinder(
@@ -729,9 +726,9 @@ class RayEdgeCylinder(VirtualObstacleBase):
                 )
 
         if self.points_list.numel() != 0:
-            sphere_marker_cfg = self.cfg.points_visualizer.markers.get("sphere", None)
-            sphere_rgba = _marker_rgba_from_cfg(sphere_marker_cfg, default_rgba=(0.0, 0.5, 0.5, 1.0))
-            sphere_radius = float(getattr(sphere_marker_cfg, "radius", 0.01))
+            sphere_marker_cfg = self.cfg.points_visualizer.markers["sphere"]
+            sphere_rgba = _marker_rgba_from_cfg(sphere_marker_cfg)
+            sphere_radius = float(sphere_marker_cfg.radius)
             for point in self.points_list:
                 visualizer.add_sphere(
                     center=point,

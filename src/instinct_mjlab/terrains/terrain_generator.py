@@ -173,7 +173,7 @@ class FiledTerrainGenerator(TerrainGenerator):
         """Cache original patch-radius config per subterrain for mesh sampling."""
         self._original_patch_radii_by_cfg_id.clear()
         for sub_cfg in cfg.sub_terrains.values():
-            patch_sampling = getattr(sub_cfg, "flat_patch_sampling", None)
+            patch_sampling = sub_cfg.flat_patch_sampling
             if patch_sampling is None:
                 continue
             cached_patch_radii: dict[str, float | list[float] | tuple[float, ...]] = {}
@@ -185,7 +185,7 @@ class FiledTerrainGenerator(TerrainGenerator):
     def _normalize_patch_radii_for_mjlab_core(cfg: FiledTerrainGeneratorCfg) -> None:
         """Normalize list-style patch radii to scalar max for mjlab core init."""
         for sub_cfg in cfg.sub_terrains.values():
-            patch_sampling = getattr(sub_cfg, "flat_patch_sampling", None)
+            patch_sampling = sub_cfg.flat_patch_sampling
             if patch_sampling is None:
                 continue
             for patch_cfg in patch_sampling.values():
@@ -211,12 +211,16 @@ class FiledTerrainGenerator(TerrainGenerator):
         ``vertical_scale`` and ``slope_threshold`` as generator-wide settings.
         Parkour configs rely on this behavior (for example stair step discretization).
         """
+        from .height_field.hf_terrains_cfg import HfTerrainBaseCfg
+
         for sub_cfg in cfg.sub_terrains.values():
-            if cfg.horizontal_scale is not None and hasattr(sub_cfg, "horizontal_scale"):
+            if not isinstance(sub_cfg, HfTerrainBaseCfg):
+                continue
+            if cfg.horizontal_scale is not None:
                 sub_cfg.horizontal_scale = cfg.horizontal_scale
-            if cfg.vertical_scale is not None and hasattr(sub_cfg, "vertical_scale"):
+            if cfg.vertical_scale is not None:
                 sub_cfg.vertical_scale = cfg.vertical_scale
-            if cfg.slope_threshold is not None and hasattr(sub_cfg, "slope_threshold"):
+            if cfg.slope_threshold is not None:
                 sub_cfg.slope_threshold = cfg.slope_threshold
 
     def _add_hfield_collision_from_surface_mesh(
@@ -231,15 +235,15 @@ class FiledTerrainGenerator(TerrainGenerator):
         """Add native hfield collision for terrain mesh surface."""
         from instinct_mjlab.terrains.trimesh.mesh_terrains import _add_collision_hfield_from_mesh
 
-        resolution = getattr(self.cfg, "hfield_resolution", None)
+        resolution = self.cfg.hfield_resolution
         if resolution is None:
-            resolution = getattr(sub_terrain_cfg, "horizontal_scale", None)
+            resolution = sub_terrain_cfg.horizontal_scale
         if resolution is None:
             resolution = 0.05
         resolution = float(resolution)
-        wall_thickness = float(getattr(sub_terrain_cfg, "wall_thickness", 0.0) or 0.0)
-        cfg_border_width = float(getattr(sub_terrain_cfg, "border_width", 0.0) or 0.0)
-        global_stitch_border_width = float(getattr(self.cfg, "hfield_stitch_border_width", 0.0) or 0.0)
+        wall_thickness = float(sub_terrain_cfg.wall_thickness or 0.0)
+        cfg_border_width = float(sub_terrain_cfg.border_width or 0.0)
+        global_stitch_border_width = float(self.cfg.hfield_stitch_border_width or 0.0)
         # Keep terrain seams height-aligned over the intended flat border zone.
         # Use the widest available border hint so every sub-terrain has a
         # consistently flat outer ring before tile stitching.
@@ -260,13 +264,11 @@ class FiledTerrainGenerator(TerrainGenerator):
         collision_cfg = _HfieldCollisionCfg(
             size=(float(sub_terrain_cfg.size[0]), float(sub_terrain_cfg.size[1])),
             collision_hfield_resolution=resolution,
-            collision_hfield_base_thickness_ratio=float(
-                getattr(self.cfg, "hfield_base_thickness_ratio", 1.0)
-            ),
-            collision_hfield_num_workers=int(getattr(self.cfg, "hfield_num_workers", 0)),
-            collision_hfield_raycast_backend=str(getattr(self.cfg, "hfield_raycast_backend", "cpu")),
-            collision_hfield_gpu_device=str(getattr(self.cfg, "hfield_gpu_device", "cuda")),
-            collision_hfield_gpu_batch_size=int(getattr(self.cfg, "hfield_gpu_batch_size", 262144)),
+            collision_hfield_base_thickness_ratio=float(self.cfg.hfield_base_thickness_ratio),
+            collision_hfield_num_workers=int(self.cfg.hfield_num_workers),
+            collision_hfield_raycast_backend=str(self.cfg.hfield_raycast_backend),
+            collision_hfield_gpu_device=str(self.cfg.hfield_gpu_device),
+            collision_hfield_gpu_batch_size=int(self.cfg.hfield_gpu_batch_size),
             collision_hfield_stitch_edges=True,
             collision_hfield_stitch_border_pixels=stitch_border_pixels,
             collision_hfield_stitch_height=float(stitch_height),
@@ -348,17 +350,17 @@ class FiledTerrainGenerator(TerrainGenerator):
         geom_pos: np.ndarray,
     ) -> trimesh.Trimesh | None:
         """Convert a MuJoCo hfield spec + geom pose into a world-frame trimesh."""
-        nrow = int(getattr(hfield_spec, "nrow", 0))
-        ncol = int(getattr(hfield_spec, "ncol", 0))
+        nrow = int(hfield_spec.nrow)
+        ncol = int(hfield_spec.ncol)
         if nrow <= 1 or ncol <= 1:
             return None
 
-        userdata = np.asarray(getattr(hfield_spec, "userdata", []), dtype=np.float64)
+        userdata = np.asarray(hfield_spec.userdata, dtype=np.float64)
         if userdata.size != nrow * ncol:
             return None
         normalized_heights = userdata.reshape(nrow, ncol)
 
-        size = np.asarray(getattr(hfield_spec, "size", []), dtype=np.float64).reshape(-1)
+        size = np.asarray(hfield_spec.size, dtype=np.float64).reshape(-1)
         if size.size < 4:
             return None
         half_x, half_y, elevation_range, _base_thickness = size[:4]
@@ -395,19 +397,19 @@ class FiledTerrainGenerator(TerrainGenerator):
         """Convert a MuJoCo box geom into a world-frame trimesh."""
         if geom is None:
             return None
-        if int(getattr(geom, "type", -1)) != int(mujoco.mjtGeom.mjGEOM_BOX):
+        if int(geom.type) != int(mujoco.mjtGeom.mjGEOM_BOX):
             return None
 
-        size = np.asarray(getattr(geom, "size", []), dtype=np.float64).reshape(-1)
+        size = np.asarray(geom.size, dtype=np.float64).reshape(-1)
         if size.size < 3:
             return None
         extents = 2.0 * size[:3]
 
         transform = np.eye(4, dtype=np.float64)
-        quat = np.asarray(getattr(geom, "quat", [1.0, 0.0, 0.0, 0.0]), dtype=np.float64).reshape(-1)
+        quat = np.asarray(geom.quat, dtype=np.float64).reshape(-1)
         if quat.size >= 4:
             transform[:3, :3] = trimesh.transformations.quaternion_matrix(quat[:4])[:3, :3]
-        transform[:3, 3] = np.asarray(getattr(geom, "pos", [0.0, 0.0, 0.0]), dtype=np.float64).reshape(3)
+        transform[:3, 3] = np.asarray(geom.pos, dtype=np.float64).reshape(3)
         return trimesh.creation.box(extents=extents, transform=transform)
 
     def _create_terrain_geom(
@@ -466,7 +468,7 @@ class FiledTerrainGenerator(TerrainGenerator):
             geom = terrain_geom.geom
             if geom is None:
                 continue
-            hfield_name = getattr(geom, "hfieldname", "")
+            hfield_name = geom.hfieldname
             if not isinstance(hfield_name, str) or hfield_name == "":
                 continue
             mjs_hfield = spec.hfield(hfield_name)
@@ -506,7 +508,7 @@ class FiledTerrainGenerator(TerrainGenerator):
                 geom = terrain_geom.geom
                 if geom is None:
                     continue
-                mesh_name = getattr(geom, "meshname", "")
+                mesh_name = geom.meshname
                 if isinstance(mesh_name, str) and mesh_name in new_mesh_names:
                     mjs_mesh = spec.mesh(mesh_name)
                     if mjs_mesh is None:
@@ -518,7 +520,7 @@ class FiledTerrainGenerator(TerrainGenerator):
                     self._terrain_meshes.append(world_mesh)
                     continue
 
-                hfield_name = getattr(geom, "hfieldname", "")
+                hfield_name = geom.hfieldname
                 if not isinstance(hfield_name, str) or hfield_name not in new_hfield_names:
                     continue
                 mjs_hfield = spec.hfield(hfield_name)

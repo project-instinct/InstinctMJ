@@ -108,6 +108,9 @@ class MotionReferenceManagerCfg(SensorCfg):
     """ link mapping is in the order of `link_of_interests` """
 
     ### visualizations ###
+    debug_vis: bool = False
+    """Enable reference-robot visualization semantics from InstinctLab."""
+
     reference_entity_name: str | None = None
     """ The entity name of the reference robot in scene.entities.
         To activate the robot model visualization, please spawn another articulation with no
@@ -121,6 +124,7 @@ class MotionReferenceManagerCfg(SensorCfg):
         markers={
             "root_frame_ref": {
                 "scale": (0.15, 0.15, 0.15),
+                "color": (1.0, 1.0, 1.0, 1.0),
             },
             "link_ref": {
                 "radius": 0.04,
@@ -128,6 +132,7 @@ class MotionReferenceManagerCfg(SensorCfg):
             },
             "relative_link_ref": {
                 "scale": (0.05, 0.05, 0.05),
+                "color": (1.0, 1.0, 1.0, 1.0),
             },
         },
     ))
@@ -151,6 +156,13 @@ class MotionReferenceManagerCfg(SensorCfg):
     - 'aiming_frame': get aiming frame idx and select from the motion_reference data
     - 'reference_frame': get the reference state directly from motion_reference.reference_frame
     """
+
+    def __post_init__(self):
+        # Keep InstinctLab-style debug_vis while using mjlab's reference_entity_name.
+        if self.reference_entity_name is not None:
+            self.debug_vis = True
+        elif self.debug_vis:
+            self.reference_entity_name = "robot_reference"
 
 
 @dataclass(kw_only=True)

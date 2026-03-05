@@ -19,8 +19,10 @@ from mjlab.terrains.terrain_generator import (
 def _unwrap_height_field_function(function_obj: object) -> object:
     """Unwrap decorator layers and return the raw height-field callable."""
     raw_function = function_obj
-    while hasattr(raw_function, "__wrapped__"):
-        raw_function = raw_function.__wrapped__
+    wrapped_function = getattr(raw_function, "__wrapped__", None)
+    while wrapped_function is not None:
+        raw_function = wrapped_function
+        wrapped_function = getattr(raw_function, "__wrapped__", None)
     return raw_function
 
 
@@ -31,15 +33,12 @@ def _add_wall_geometries(
     rng: np.random.Generator,
 ) -> list[TerrainGeometry]:
     """Add optional side walls, matching legacy `generate_wall` semantics."""
-    if not hasattr(cfg, "wall_prob"):
-        return []
-
-    wall_prob = getattr(cfg, "wall_prob")
+    wall_prob = cfg.wall_prob
     if wall_prob is None:
         return []
 
-    wall_height = float(getattr(cfg, "wall_height", 5.0))
-    wall_thickness = float(getattr(cfg, "wall_thickness", 0.05))
+    wall_height = float(cfg.wall_height)
+    wall_thickness = float(cfg.wall_thickness)
     if wall_height <= 0.0 or wall_thickness <= 0.0:
         return []
 
@@ -228,7 +227,7 @@ def _height_field_to_output(
 
     normalized_elevation = (heights_i16 - elevation_min) / elevation_range_i16
     max_physical_height = float(elevation_range_i16) * float(cfg.vertical_scale)
-    base_thickness = max_physical_height * float(getattr(cfg, "base_thickness_ratio", 1.0))
+    base_thickness = max_physical_height * float(cfg.base_thickness_ratio)
     # MuJoCo hfield top height uses `geom_z + normalized * elevation_range`.
     # `base_thickness` only controls underside thickness and must NOT be
     # subtracted from geom z, otherwise each tile gets an extra depth-dependent
@@ -323,6 +322,9 @@ class HfTerrainBaseCfg(SubTerrainCfg):
     slope_threshold: float | None = None
     flat_patch_sampling: dict[str, FlatPatchSamplingCfg] | None = None
     base_thickness_ratio: float = 1.0
+    wall_prob: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
+    wall_height: float = 5.0
+    wall_thickness: float = 0.05
 
     def _generate_height_field(self, difficulty: float, cfg_for_gen: "HfTerrainBaseCfg") -> np.ndarray:
         raise NotImplementedError(

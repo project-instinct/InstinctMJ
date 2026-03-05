@@ -54,6 +54,10 @@ class MotionReferenceManager(Sensor):
         self.cfg: MotionReferenceManagerCfg = cfg
         self._is_initialized: bool = False
         self._scene: Scene | None = None
+        self._entities: dict = {}
+        self._timestamp: torch.Tensor | None = None
+        self._env_origins: torch.Tensor | None = None
+        self._reference_entity = None
 
     def __str__(self):
         """Get the tabular information of the motion reference managed buffer."""
@@ -105,7 +109,7 @@ class MotionReferenceManager(Sensor):
         InstinctLab timing semantics for keyframe-threshold terms.
         """
         super().update(dt)
-        if not self._is_initialized or not hasattr(self, "_timestamp"):
+        if not self._is_initialized or self._timestamp is None:
             return
         self._timestamp += dt
 
@@ -120,7 +124,7 @@ class MotionReferenceManager(Sensor):
 
     def _update_outdated_buffers(self) -> None:
         """Check and update buffers for environments whose data is outdated."""
-        if not self._is_initialized or not hasattr(self, "_timestamp"):
+        if not self._is_initialized or self._timestamp is None:
             return
 
         # 1) Always refresh envs marked outdated (initially or after reset).
@@ -354,9 +358,9 @@ class MotionReferenceManager(Sensor):
 
     @property
     def env_origins(self) -> torch.Tensor:
-        return (
-            self._env_origins if hasattr(self, "_env_origins") else torch.zeros(self._num_envs, 3, device=self.device)
-        )
+        if self._env_origins is None:
+            return torch.zeros(self._num_envs, 3, device=self.device)
+        return self._env_origins
 
     @property
     def motion_buffers(self) -> dict[str, MotionBuffer]:
@@ -633,7 +637,7 @@ class MotionReferenceManager(Sensor):
     """
 
     def _resolve_entity(self, entity_name: str):
-        if not hasattr(self, "_entities") or not self._entities:
+        if not self._entities:
             raise RuntimeError(
                 "Motion reference entity lookup requires entities from edit_spec(), "
                 "but no entities were provided."
@@ -764,12 +768,10 @@ class MotionReferenceManager(Sensor):
             # to the MJCF file's parent so that MuJoCo can resolve relative mesh paths.
             prev_cwd = os.getcwd()
             os.chdir(os.path.dirname(os.path.abspath(self.cfg.robot_model_path)))
-            try:
-                self._robot_kinematics_chain = pk.build_chain_from_mjcf(model_content).to(
-                    dtype=torch.float, device=self.device
-                )
-            finally:
-                os.chdir(prev_cwd)
+            self._robot_kinematics_chain = pk.build_chain_from_mjcf(model_content).to(
+                dtype=torch.float, device=self.device
+            )
+            os.chdir(prev_cwd)
         else:
             self._robot_kinematics_chain = pk.build_chain_from_urdf(model_content).to(dtype=torch.float, device=self.device)
         # joint_pos_pk = joint_pos_sim[_joint_order_sim_to_pk]
@@ -1117,15 +1119,15 @@ class MotionReferenceManager(Sensor):
             return
         env_ids_t = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
         aiming_frame_idx = self.aiming_frame_idx[env_ids_t]
-        marker_cfgs = getattr(self.cfg.visualizer_cfg, "markers", {})
+        marker_cfgs = self.cfg.visualizer_cfg.markers
 
         if self.cfg.visualizing_marker_types:
             if "root" in self.cfg.visualizing_marker_types:
-                root_marker_cfg = marker_cfgs.get("root_frame_ref", None)
-                root_scale_cfg = getattr(root_marker_cfg, "scale", (0.15, 0.15, 0.15))
+                root_marker_cfg = marker_cfgs["root_frame_ref"]
+                root_scale_cfg = root_marker_cfg.scale
                 root_scale = float(root_scale_cfg[0]) if isinstance(root_scale_cfg, (list, tuple)) else float(root_scale_cfg)
                 root_axis_radius = max(root_scale * 0.08, 1.0e-4)
-                root_color = getattr(root_marker_cfg, "color", (1.0, 1.0, 1.0, 1.0))
+                root_color = root_marker_cfg.color
                 axis_colors = (
                     (1.0, 0.0, 0.0),  # X axis
                     (0.0, 1.0, 0.0),  # Y axis
@@ -1146,9 +1148,9 @@ class MotionReferenceManager(Sensor):
                     )
 
             if "links" in self.cfg.visualizing_marker_types:
-                link_marker_cfg = marker_cfgs.get("link_ref", None)
-                link_radius = float(getattr(link_marker_cfg, "radius", 0.04))
-                link_color = tuple(getattr(link_marker_cfg, "color", (0.0, 1.0, 0.0, 1.0)))
+                link_marker_cfg = marker_cfgs["link_ref"]
+                link_radius = float(link_marker_cfg.radius)
+                link_color = tuple(link_marker_cfg.color)
                 for i, env_id in enumerate(env_ids_t):
                     frame_idx = int(aiming_frame_idx[i].item())
                     link_pos_w = self.data.link_pos_w[env_id, frame_idx]
@@ -1156,11 +1158,11 @@ class MotionReferenceManager(Sensor):
                         visualizer.add_sphere(center=point, radius=link_radius, color=link_color)
 
             if "relative_links" in self.cfg.visualizing_marker_types:
-                rel_marker_cfg = marker_cfgs.get("relative_link_ref", None)
-                rel_scale_cfg = getattr(rel_marker_cfg, "scale", (0.05, 0.05, 0.05))
+                rel_marker_cfg = marker_cfgs["relative_link_ref"]
+                rel_scale_cfg = rel_marker_cfg.scale
                 rel_scale = float(rel_scale_cfg[0]) if isinstance(rel_scale_cfg, (list, tuple)) else float(rel_scale_cfg)
                 rel_axis_radius = max(rel_scale * 0.08, 1.0e-4)
-                rel_color = getattr(rel_marker_cfg, "color", (1.0, 1.0, 1.0, 1.0))
+                rel_color = rel_marker_cfg.color
                 rel_axis_colors = (
                     (1.0, 0.0, 0.0),  # X axis
                     (0.0, 1.0, 0.0),  # Y axis
@@ -1182,7 +1184,7 @@ class MotionReferenceManager(Sensor):
                             axis_colors=rel_axis_colors,
                         )
 
-        if not hasattr(self, "_reference_entity"):
+        if self._reference_entity is None:
             self._find_reference_view()
-        if hasattr(self, "_reference_entity"):
+        if self._reference_entity is not None:
             self._set_reference_view_state()

@@ -140,11 +140,11 @@ class InstinctRlEnv(ManagerBasedRlEnv):
   def update_visualizers(self, visualizer: DebugVisualizer) -> None:
     # Play configs can opt into visualizing debug overlays for all environments
     # (instead of only the currently selected env index in the viewer).
-    viewer_cfg = getattr(self.cfg, "viewer", None)
+    viewer_cfg = self.cfg.viewer
     if bool(getattr(viewer_cfg, "debug_vis_show_all_envs", False)):
       visualizer.show_all_envs = True
     super().update_visualizers(visualizer)
-    terrain = getattr(self.scene, "terrain", None)
+    terrain = self.scene.terrain
     if terrain is not None:
       terrain.debug_vis(visualizer)
 

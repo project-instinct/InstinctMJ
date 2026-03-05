@@ -149,6 +149,15 @@ class MotionMatchedTerrainCfg(SubTerrainBaseCfg):
     Set to 0 to use all CPU cores, and 1 to disable multiprocessing (single-process).
     """
 
+    collision_hfield_raycast_backend: str = "cpu"
+    """Ray-cast backend for collision hfield generation: ``\"cpu\"`` or ``\"gpu\"``."""
+
+    collision_hfield_gpu_device: str = "cuda"
+    """Torch/Warp device used when ``collision_hfield_raycast_backend='gpu'``."""
+
+    collision_hfield_gpu_batch_size: int = 262144
+    """Ray batch size used by GPU collision-hfield ray-casting."""
+
     collision_hfield_use_disk_cache: bool = True
     """If True, persist hfield height arrays to disk for reuse across runs.
 
@@ -165,6 +174,15 @@ class MotionMatchedTerrainCfg(SubTerrainBaseCfg):
     Keep this enabled for motion-matched terrains that may intentionally have
     out-of-mesh regions.
     """
+
+    collision_hfield_stitch_edges: bool = False
+    """Whether to force hfield border rings to a shared stitch height."""
+
+    collision_hfield_stitch_border_pixels: int = 0
+    """Border width (in hfield pixels) used when ``collision_hfield_stitch_edges=True``."""
+
+    collision_hfield_stitch_height: float | None = None
+    """Optional explicit stitch height for border rings; ``None`` uses edge average."""
 
     face_box_collision: bool = False
     """If True, replace mesh collision with per-face thin box geoms.

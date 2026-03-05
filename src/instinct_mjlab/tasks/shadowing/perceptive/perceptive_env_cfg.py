@@ -226,6 +226,13 @@ class PerceptiveShadowingSceneCfg(InteractiveSceneCfg):
 
     def __post_init__(self):
         self.spec_fn = _edit_perceptive_scene_spec
+        if "robot" not in self.entities:
+            raise ValueError("PerceptiveShadowingSceneCfg requires entity 'robot'.")
+        if not any(sensor_cfg.name == "motion_reference" for sensor_cfg in self.sensors):
+            raise ValueError("PerceptiveShadowingSceneCfg requires sensor 'motion_reference'.")
+        motion_reference_cfg = get_motion_reference_cfg(self)
+        if (not motion_reference_cfg.debug_vis) and ("robot_reference" in self.entities):
+            del self.entities["robot_reference"]
 
 
 def make_perceptive_scene_entities(
@@ -292,6 +299,7 @@ def _make_perceptive_camera_sensor_cfg() -> NoisyGroupedRayCasterCameraCfg:
             convention="world",
         ),
         data_types=["distance_to_image_plane"],
+        mesh_filter_max_hops=24,
         noise_pipeline={
             # "depth_contour_noise": DepthContourNoiseCfg(
             #     contour_threshold=1.8,  # in [m]

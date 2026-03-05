@@ -42,21 +42,21 @@ class TerrainImporter(TerrainImporterBase):
     def __init__(self, cfg: TerrainImporterCfg, device: str):
         runtime_terrain_type = cfg.terrain_type
         if runtime_terrain_type == "hacked_generator":
-            # Route hacked_generator through the generator runtime pipeline.
-            runtime_terrain_type = "generator"
+            self._hacked_terrain_type = "hacked_generator"
+            # Keep source control flow: hacked_generator enters plane branch and is
+            # intercepted inside import_ground_plane().
+            runtime_terrain_type = "plane"
 
         self._debug_vis_enabled = False
-        self._collision_debug_vis = bool(getattr(cfg, "collision_debug_vis", False))
-        self._collision_debug_rgba = tuple(getattr(cfg, "collision_debug_rgba", (0.62, 0.2, 0.9, 0.35)))
-        self._virtual_obstacle_source = str(getattr(cfg, "virtual_obstacle_source", "mesh")).lower()
+        self._collision_debug_vis = bool(cfg.collision_debug_vis)
+        self._collision_debug_rgba = tuple(cfg.collision_debug_rgba)
+        self._virtual_obstacle_source = str(cfg.virtual_obstacle_source).lower()
         if self._virtual_obstacle_source not in ("mesh", "heightfield"):
             raise ValueError(
                 "virtual_obstacle_source must be 'mesh' or 'heightfield'. "
                 f"Got: {self._virtual_obstacle_source!r}"
             )
-        self._virtual_obstacle_hfield_method = str(
-            getattr(cfg, "virtual_obstacle_hfield_method", "mesh_like")
-        ).lower()
+        self._virtual_obstacle_hfield_method = str(cfg.virtual_obstacle_hfield_method).lower()
         if self._virtual_obstacle_hfield_method != "mesh_like":
             raise ValueError(
                 "virtual_obstacle_hfield_method must be 'mesh_like'. "
@@ -83,6 +83,8 @@ class TerrainImporter(TerrainImporterBase):
         self.env_origins = None
         self.terrain_origins = None
         self.terrain_generator = None
+        self._flat_patches = {}
+        self._flat_patch_radii = {}
 
         if self.cfg.terrain_type == "generator":
             if self.cfg.terrain_generator is None:
@@ -94,6 +96,8 @@ class TerrainImporter(TerrainImporterBase):
                 "class_type",
                 TerrainGenerator,
             )
+            if terrain_generator_cls is None:
+                terrain_generator_cls = TerrainGenerator
             self.terrain_generator = terrain_generator_cls(
                 self.cfg.terrain_generator,
                 device=self.device,
@@ -107,9 +111,8 @@ class TerrainImporter(TerrainImporterBase):
             self._flat_patch_radii = dict(self.terrain_generator.flat_patch_radii)
         elif self.cfg.terrain_type == "plane":
             self.import_ground_plane("terrain")
-            self.configure_env_origins()
-            self._flat_patches = {}
-            self._flat_patch_radii = {}
+            if self.env_origins is None:
+                self.configure_env_origins()
         else:
             raise ValueError(f"Unknown terrain type: {self.cfg.terrain_type}")
 
@@ -166,6 +169,27 @@ class TerrainImporter(TerrainImporterBase):
 
     def import_ground_plane(self, name: str):
         """Import a flat MuJoCo plane terrain."""
+        if getattr(self, "_hacked_terrain_type", None) == "hacked_generator":
+            # check config is provided
+            if self.cfg.terrain_generator is None:
+                raise ValueError("Input terrain type is 'generator' but no value provided for 'terrain_generator'.")
+            # generate the terrain
+            self.terrain_generator = getattr(
+                self.cfg.terrain_generator,
+                "class_type",
+                TerrainGenerator,
+            )(cfg=self.cfg.terrain_generator, device=self.device)
+            self.terrain_generator.compile(self._spec)
+            # configure the terrain origins based on the terrain generator
+            self.configure_env_origins(self.terrain_generator.terrain_origins)
+            # refer to the flat patches
+            self._flat_patches = {
+                name: torch.from_numpy(arr).to(device=self.device, dtype=torch.float)
+                for name, arr in self.terrain_generator.flat_patches.items()
+            }
+            self._flat_patch_radii = dict(self.terrain_generator.flat_patch_radii)
+            return
+
         self._spec.worldbody.add_body(name=name).add_geom(
             name=name,
             type=mujoco.mjtGeom.mjGEOM_PLANE,
@@ -175,7 +199,7 @@ class TerrainImporter(TerrainImporterBase):
     def _get_terrain_mesh_for_virtual_obstacles(self) -> trimesh.Trimesh | None:
         if self.terrain_generator is None:
             return None
-        terrain_mesh = getattr(self.terrain_generator, "terrain_mesh", None)
+        terrain_mesh = self.terrain_generator.terrain_mesh
         return terrain_mesh
 
     def _generate_virtual_obstacles(self, mesh: trimesh.Trimesh):
@@ -410,17 +434,17 @@ class TerrainImporter(TerrainImporterBase):
         slope_threshold: float | None = None,
     ) -> trimesh.Trimesh | None:
         """Convert one MuJoCo hfield spec + geom pose into world-frame trimesh."""
-        nrow = int(getattr(hfield_spec, "nrow", 0))
-        ncol = int(getattr(hfield_spec, "ncol", 0))
+        nrow = int(hfield_spec.nrow)
+        ncol = int(hfield_spec.ncol)
         if nrow <= 1 or ncol <= 1:
             return None
 
-        userdata = np.asarray(getattr(hfield_spec, "userdata", []), dtype=np.float64)
+        userdata = np.asarray(hfield_spec.userdata, dtype=np.float64)
         if userdata.size != nrow * ncol:
             return None
         normalized_heights = userdata.reshape(nrow, ncol)
 
-        size = np.asarray(getattr(hfield_spec, "size", []), dtype=np.float64).reshape(-1)
+        size = np.asarray(hfield_spec.size, dtype=np.float64).reshape(-1)
         if size.size < 4:
             return None
         half_x, half_y, elevation_range, _base_thickness = size[:4]
@@ -462,8 +486,10 @@ class TerrainImporter(TerrainImporterBase):
 
     def _get_hfield_mesh_like_slope_threshold(self) -> float | None:
         """Resolve slope-threshold used when reconstructing hfield surface mesh."""
-        terrain_gen_cfg = getattr(self.cfg, "terrain_generator", None)
-        slope_threshold = getattr(terrain_gen_cfg, "slope_threshold", None)
+        terrain_gen_cfg = self.cfg.terrain_generator
+        if terrain_gen_cfg is None:
+            return None
+        slope_threshold = terrain_gen_cfg.slope_threshold
         if slope_threshold is None:
             return None
         slope_threshold = float(slope_threshold)
@@ -480,13 +506,13 @@ class TerrainImporter(TerrainImporterBase):
         slope_threshold = self._get_hfield_mesh_like_slope_threshold()
         meshes: list[trimesh.Trimesh] = []
         for geom in terrain_body.geoms:
-            hfield_name = getattr(geom, "hfieldname", "")
+            hfield_name = geom.hfieldname
             if not isinstance(hfield_name, str) or hfield_name == "":
                 continue
             hfield_spec = self._spec.hfield(hfield_name)
             if hfield_spec is None:
                 continue
-            geom_pos = np.asarray(getattr(geom, "pos", [0.0, 0.0, 0.0]), dtype=np.float64).reshape(3)
+            geom_pos = np.asarray(geom.pos, dtype=np.float64).reshape(3)
             world_mesh = self._hfield_spec_to_world_mesh(
                 hfield_spec,
                 geom_pos,
@@ -518,16 +544,16 @@ class TerrainImporter(TerrainImporterBase):
         sharp_threshold = np.deg2rad(float(angle_threshold))
         edge_segments_list: list[np.ndarray] = []
         for geom in terrain_body.geoms:
-            hfield_name = getattr(geom, "hfieldname", "")
+            hfield_name = geom.hfieldname
             if not isinstance(hfield_name, str) or hfield_name == "":
                 continue
             hfield_spec = self._spec.hfield(hfield_name)
             if hfield_spec is None:
                 continue
-            ncol = int(getattr(hfield_spec, "ncol", 0))
+            ncol = int(hfield_spec.ncol)
             if ncol <= 1:
                 continue
-            geom_pos = np.asarray(getattr(geom, "pos", [0.0, 0.0, 0.0]), dtype=np.float64).reshape(3)
+            geom_pos = np.asarray(geom.pos, dtype=np.float64).reshape(3)
             world_mesh = self._hfield_spec_to_world_mesh(
                 hfield_spec,
                 geom_pos,
@@ -581,21 +607,19 @@ class TerrainImporter(TerrainImporterBase):
         if not trace_segments:
             return edge_segments
 
-        simplify_epsilon = float(getattr(self.cfg, "virtual_obstacle_hfield_trace_simplify_epsilon", 0.03))
-        min_segment_length = float(getattr(self.cfg, "virtual_obstacle_hfield_trace_min_segment_length", 0.04))
-        snap_xy = getattr(self.cfg, "virtual_obstacle_hfield_trace_snap_xy", None)
+        simplify_epsilon = float(self.cfg.virtual_obstacle_hfield_trace_simplify_epsilon)
+        min_segment_length = float(self.cfg.virtual_obstacle_hfield_trace_min_segment_length)
+        snap_xy = self.cfg.virtual_obstacle_hfield_trace_snap_xy
         if snap_xy is not None:
             snap_xy = float(snap_xy)
             if snap_xy <= 0.0:
                 snap_xy = None
-        snap_z = getattr(self.cfg, "virtual_obstacle_hfield_trace_snap_z", None)
+        snap_z = self.cfg.virtual_obstacle_hfield_trace_snap_z
         if snap_z is not None:
             snap_z = float(snap_z)
             if snap_z <= 0.0:
                 snap_z = None
-        collinear_angle_threshold = float(
-            getattr(self.cfg, "virtual_obstacle_hfield_trace_collinear_angle_threshold", 6.0)
-        )
+        collinear_angle_threshold = float(self.cfg.virtual_obstacle_hfield_trace_collinear_angle_threshold)
         return self._trace_segments_as_graph_polylines(
             edge_segments,
             simplify_epsilon=simplify_epsilon,
@@ -610,56 +634,60 @@ class TerrainImporter(TerrainImporterBase):
         if len(self._virtual_obstacles) == 0:
             return True
 
-        drop_cell_diagonals = bool(
-            getattr(self.cfg, "virtual_obstacle_hfield_mesh_like_drop_cell_diagonals", True)
-        )
-        trace_segments = bool(getattr(self.cfg, "virtual_obstacle_hfield_mesh_like_trace_segments", True))
-        min_edge_length = float(getattr(self.cfg, "virtual_obstacle_hfield_mesh_like_min_edge_length", 0.0))
+        drop_cell_diagonals = bool(self.cfg.virtual_obstacle_hfield_mesh_like_drop_cell_diagonals)
+        trace_segments = bool(self.cfg.virtual_obstacle_hfield_mesh_like_trace_segments)
+        min_edge_length = float(self.cfg.virtual_obstacle_hfield_mesh_like_min_edge_length)
         cached_segments_by_angle: dict[float, np.ndarray] = {}
-        try:
-            generated_any = False
-            for name, virtual_obstacle in self._virtual_obstacles.items():
-                if not hasattr(virtual_obstacle, "generate_from_edge_segments"):
-                    hfield_surface_mesh = self._collect_hfield_surface_mesh()
-                    if hfield_surface_mesh is None:
-                        return False
-                    self._generate_virtual_obstacles(hfield_surface_mesh)
-                    del hfield_surface_mesh
-                    return True
+        generated_any = False
+        for name, virtual_obstacle in self._virtual_obstacles.items():
+            if not virtual_obstacle.supports_edge_segment_generation:
+                hfield_surface_mesh = self._collect_hfield_surface_mesh()
+                if hfield_surface_mesh is None:
+                    self._cleanup_heightfield_virtual_obstacle_cache(cached_segments_by_angle)
+                    return False
+                self._generate_virtual_obstacles(hfield_surface_mesh)
+                del hfield_surface_mesh
+                self._cleanup_heightfield_virtual_obstacle_cache(cached_segments_by_angle)
+                return True
 
-                angle_threshold = float(getattr(virtual_obstacle, "angle_threshold", 70.0))
-                cache_key = round(angle_threshold, 6)
-                if cache_key not in cached_segments_by_angle:
-                    cached_segments_by_angle[cache_key] = self._collect_hfield_mesh_like_edge_segments(
-                        angle_threshold=angle_threshold,
-                        drop_cell_diagonals=drop_cell_diagonals,
-                        trace_segments=trace_segments,
-                        min_edge_length=min_edge_length,
-                    )
-                edge_segments = cached_segments_by_angle[cache_key]
-                with Timer(f"Generate virtual obstacle {name} from heightfield (mesh_like)"):
-                    virtual_obstacle.generate_from_edge_segments(edge_segments, device=self.device)
-                generated_any = True
-            return generated_any
-        finally:
-            # Mesh-like extraction can allocate large temporary numpy/trimesh buffers.
-            # Release them immediately after startup generation to reduce peak memory.
-            cached_segments_by_angle.clear()
-            gc.collect()
-            if torch.cuda.is_available():
-                device_type = torch.device(self.device).type
-                if device_type == "cuda":
-                    torch.cuda.empty_cache()
+            angle_threshold = float(virtual_obstacle.angle_threshold)
+            cache_key = round(angle_threshold, 6)
+            if cache_key not in cached_segments_by_angle:
+                cached_segments_by_angle[cache_key] = self._collect_hfield_mesh_like_edge_segments(
+                    angle_threshold=angle_threshold,
+                    drop_cell_diagonals=drop_cell_diagonals,
+                    trace_segments=trace_segments,
+                    min_edge_length=min_edge_length,
+                )
+            edge_segments = cached_segments_by_angle[cache_key]
+            with Timer(f"Generate virtual obstacle {name} from heightfield (mesh_like)"):
+                virtual_obstacle.generate_from_edge_segments(edge_segments, device=self.device)
+            generated_any = True
+
+        self._cleanup_heightfield_virtual_obstacle_cache(cached_segments_by_angle)
+        return generated_any
+
+    def _cleanup_heightfield_virtual_obstacle_cache(self, cached_segments_by_angle: dict[float, np.ndarray]) -> None:
+        # Mesh-like extraction can allocate large temporary numpy/trimesh buffers.
+        # Release them immediately after startup generation to reduce peak memory.
+        cached_segments_by_angle.clear()
+        gc.collect()
+        if torch.cuda.is_available():
+            device_type = torch.device(self.device).type
+            if device_type == "cuda":
+                torch.cuda.empty_cache()
 
     def _release_terrain_mesh_cache(self) -> None:
         """Release terrain mesh cache once virtual obstacles are built."""
+        from .terrain_generator import FiledTerrainGenerator
+
         if self.terrain_generator is None:
             return
-        if hasattr(self.terrain_generator, "terrain_mesh"):
+        if isinstance(self.terrain_generator, FiledTerrainGenerator):
             self.terrain_generator.terrain_mesh = None
-        terrain_meshes = getattr(self.terrain_generator, "_terrain_meshes", None)
-        if isinstance(terrain_meshes, list):
-            terrain_meshes.clear()
+            terrain_meshes = self.terrain_generator._terrain_meshes
+            if isinstance(terrain_meshes, list):
+                terrain_meshes.clear()
 
     def _apply_collision_debug_visual_style(self) -> None:
         """Tint terrain collision geoms so they are visible in the viewer."""
@@ -667,8 +695,8 @@ class TerrainImporter(TerrainImporterBase):
         if terrain_body is None:
             return
         for geom in terrain_body.geoms:
-            contype = int(getattr(geom, "contype", 1))
-            conaffinity = int(getattr(geom, "conaffinity", 1))
+            contype = int(geom.contype)
+            conaffinity = int(geom.conaffinity)
             if contype == 0 and conaffinity == 0:
                 continue
             geom.rgba[:] = self._collision_debug_rgba
@@ -695,8 +723,7 @@ class TerrainImporter(TerrainImporterBase):
         if not self._debug_vis_enabled:
             return
         for virtual_obstacle in self._virtual_obstacles.values():
-            if hasattr(virtual_obstacle, "debug_vis"):
-                virtual_obstacle.debug_vis(visualizer)
+            virtual_obstacle.debug_vis(visualizer)
 
     def configure_env_origins(self, origins: np.ndarray | torch.Tensor | None = None):
         """Configure the environment origins.
@@ -704,4 +731,7 @@ class TerrainImporter(TerrainImporterBase):
         Args:
             origins: The origins of the environments. Shape is (num_envs, 3).
         """
+        if origins is None and getattr(self, "_hacked_terrain_type", None) == "hacked_generator":
+            # In case of None override, we don't need to do anything
+            return
         return super().configure_env_origins(origins)

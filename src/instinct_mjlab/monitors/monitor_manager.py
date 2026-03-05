@@ -35,6 +35,10 @@ class MonitorSensor:
         # placeholder
         del dt
 
+    def debug_vis(self, visualizer):
+        # placeholder
+        del visualizer
+
     # def _update_buffers_impl(self, env_ids: Sequence[int]):
 
     def reset(self, env_ids: Sequence[int] | slice | None = None):
@@ -63,6 +67,10 @@ class MonitorTerm(ManagerTermBase):
     def reset_idx(self, env_ids: Sequence[int] | slice):
         # placeholder
         pass
+
+    def debug_vis(self, visualizer):
+        # placeholder
+        del visualizer
 
     @abstractmethod
     def get_log(self, is_episode=False) -> dict[str, float]:
@@ -95,8 +103,9 @@ class MonitorManager(ManagerBase):
         index = 0
         for term_name in self._terms.keys():
             term = self._terms[term_name]
-            func = term.__class__.__name__
-            if hasattr(term, "__name__"):
+            if isinstance(term, (MonitorTerm, MonitorSensor)):
+                func = term.__class__.__name__
+            else:
                 func = term.__name__
             table.add_row([index, term_name, func])
             index += 1
@@ -123,9 +132,7 @@ class MonitorManager(ManagerBase):
     def debug_vis(self, visualizer: "DebugVisualizer") -> None:
         """Render monitor debug visuals for terms that implement them."""
         for term in self._terms.values():
-            debug_fn = getattr(term, "debug_vis", None)
-            if callable(debug_fn):
-                debug_fn(visualizer)
+            term.debug_vis(visualizer)
 
     """
     Operations

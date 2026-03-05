@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+import mujoco_warp as mjwarp
 import torch
 import warp as wp
 
@@ -120,9 +121,10 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         self._offset_quat: torch.Tensor | None = None
         self._offset_pos: torch.Tensor | None = None
         self._focal_length: float = 1.0
-        self._update_period_s: float = max(float(getattr(cfg, "update_period", 0.0)), 0.0)
+        self._update_period_s: float = max(float(cfg.update_period), 0.0)
         self._elapsed_since_refresh: torch.Tensor = torch.empty(0)
         self._refresh_mask: torch.Tensor = torch.empty(0, dtype=torch.bool)
+        self._has_fresh_sense = False
 
     def __str__(self) -> str:
         """Returns: A string containing information about the instance."""
@@ -195,6 +197,7 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         self._offset_pos = torch.tensor(list(self.cfg.offset.pos), device=device, dtype=torch.float32).repeat(
             self._num_envs, 1
         )
+        self._has_fresh_sense = False
 
     def set_intrinsic_matrices(
         self, matrices: torch.Tensor, focal_length: float = 1.0, env_ids: Sequence[int] | None = None
@@ -219,6 +222,7 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         )
         self.ray_starts[env_ids] = ray_starts
         self.ray_directions[env_ids] = ray_directions
+        self._has_fresh_sense = False
 
     def reset(self, env_ids: Sequence[int] | None = None):
         # reset the timestamps
@@ -237,12 +241,15 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         if self._update_period_s > 0.0:
             self._elapsed_since_refresh[env_ids] = self._update_period_s
         self._refresh_mask[env_ids] = True
+        self._has_fresh_sense = False
 
     def update(self, dt: float) -> None:
         super().update(dt)
         if self._update_period_s <= 0.0:
+            self._has_fresh_sense = False
             return
         self._elapsed_since_refresh += float(dt)
+        self._has_fresh_sense = False
 
     def set_world_poses(
         self,
@@ -296,6 +303,7 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         pos_w, quat_w = self._compute_camera_world_poses(env_ids)
         self._camera_data.pos_w[env_ids] = pos_w
         self._camera_data.quat_w_world[env_ids] = quat_w
+        self._has_fresh_sense = False
 
     def set_world_poses_from_view(
         self, eyes: torch.Tensor, targets: torch.Tensor, env_ids: Sequence[int] | None = None
@@ -417,6 +425,7 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         if stale_env_ids is not None:
             for data_type, cached_output in stale_cached_outputs.items():
                 self._camera_data.output[data_type][stale_env_ids] = cached_output
+        self._has_fresh_sense = True
 
     def debug_vis(self, visualizer: "DebugVisualizer") -> None:
         """Debug visualization for the grouped ray-caster camera.
@@ -518,13 +527,13 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         """Computes the intrinsic matrices for the camera based on the config provided."""
         # get the sensor properties
         pattern_cfg = self.cfg.pattern
-        if (
-            self.cfg.focal_length is not None
-            and self.cfg.horizontal_aperture is not None
-            and self.cfg.vertical_aperture is not None
-        ):
+        if self.cfg.focal_length is not None and self.cfg.horizontal_aperture is not None:
+            vertical_aperture = self.cfg.vertical_aperture
+            # Keep InstinctLab semantics: auto-compute vertical aperture if omitted.
+            if vertical_aperture is None:
+                vertical_aperture = self.cfg.horizontal_aperture * pattern_cfg.height / pattern_cfg.width
             f_x = pattern_cfg.width * self.cfg.focal_length / self.cfg.horizontal_aperture
-            f_y = pattern_cfg.height * self.cfg.focal_length / self.cfg.vertical_aperture
+            f_y = pattern_cfg.height * self.cfg.focal_length / vertical_aperture
             c_x = self.cfg.horizontal_aperture_offset * f_x + pattern_cfg.width / 2
             c_y = self.cfg.vertical_aperture_offset * f_y + pattern_cfg.height / 2
             self._focal_length = self.cfg.focal_length
@@ -609,5 +618,19 @@ class GroupedRayCasterCamera(GroupedRayCaster):
 
         return pos_w, quat_w
 
+    def _sense_on_demand(self) -> None:
+        """Fallback path to preserve legacy data-access refresh semantics."""
+        if self._ctx is None:
+            return
+        if self._model is None or self._data is None or self._wp_device is None:
+            return
+        self.prepare_rays()
+        with wp.ScopedDevice(self._wp_device):
+            mjwarp.refit_bvh(self._model, self._data, self._ctx.render_context)
+            self.raycast_kernel(rc=self._ctx.render_context)
+        self.postprocess_rays()
+
     def _compute_data(self) -> CameraData:
+        if not self._has_fresh_sense:
+            self._sense_on_demand()
         return self._camera_data

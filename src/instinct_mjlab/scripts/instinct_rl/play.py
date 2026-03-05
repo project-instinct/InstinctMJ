@@ -6,7 +6,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -17,7 +17,6 @@ from instinct_rl.runners import OnPolicyRunner
 import instinct_mjlab.tasks  # noqa: F401
 import mjlab
 from instinct_mjlab.rl import InstinctRlVecEnvWrapper
-from instinct_mjlab.utils.distillation import prepare_distillation_algorithm_cfg
 from instinct_mjlab.utils.motion_validation import (
   validate_tracking_motion_file,
 )
@@ -111,13 +110,13 @@ def _disable_headless_debug_visualization(env_cfg) -> None:
   if scene is not None:
     sensors = getattr(scene, "sensors", ())
     for sensor_cfg in sensors:
-      if hasattr(sensor_cfg, "debug_vis"):
+      if getattr(sensor_cfg, "debug_vis", None) is not None:
         sensor_cfg.debug_vis = False
 
   commands = getattr(env_cfg, "commands", None)
   if isinstance(commands, dict):
     for command_cfg in commands.values():
-      if hasattr(command_cfg, "debug_vis"):
+      if getattr(command_cfg, "debug_vis", None) is not None:
         command_cfg.debug_vis = False
 
   observations = getattr(env_cfg, "observations", None)
@@ -500,13 +499,7 @@ def run_play(task_id: str, cfg: PlayConfig) -> None:
     runner = None
     if checkpoint is not None or cfg.export_onnx:
       runner_cls = load_runner_cls(task_id) or OnPolicyRunner
-      agent_cfg_dict = agent_cfg.to_dict() if hasattr(agent_cfg, "to_dict") else asdict(agent_cfg)
-      prepare_distillation_algorithm_cfg(
-        agent_cfg=agent_cfg_dict,
-        obs_format=vec_env.get_obs_format(),
-        num_actions=vec_env.num_actions,
-        num_rewards=vec_env.num_rewards,
-      )
+      agent_cfg_dict = agent_cfg.to_dict()
       runner = runner_cls(
         vec_env,
         agent_cfg_dict,

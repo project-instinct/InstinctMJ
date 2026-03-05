@@ -7,7 +7,7 @@ import os
 import re
 import signal
 import sys
-from dataclasses import asdict, dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -20,11 +20,6 @@ from instinct_rl.runners import OnPolicyRunner
 import instinct_mjlab.tasks  # noqa: F401
 import mjlab
 from instinct_mjlab.rl import InstinctRlOnPolicyRunnerCfg, InstinctRlVecEnvWrapper
-from instinct_mjlab.utils.distillation import (
-  prepare_distillation_algorithm_cfg,
-  validate_distillation_runtime_cfg,
-  validate_distillation_teacher_assets,
-)
 from instinct_mjlab.utils.motion_validation import (
   validate_tracking_motion_file,
 )
@@ -169,7 +164,10 @@ def _set_nested_attr(target: Any, path: str, value: Any) -> None:
         raise ValueError(f"Unknown dict key '{part}' while applying override '{path}'.")
       current = current[part]
     else:
-      if not hasattr(current, part):
+      if is_dataclass(current):
+        if part not in current.__dataclass_fields__:
+          raise ValueError(f"Unknown attribute '{part}' while applying override '{path}'.")
+      elif part not in vars(current):
         raise ValueError(f"Unknown attribute '{part}' while applying override '{path}'.")
       current = getattr(current, part)
 
@@ -180,7 +178,10 @@ def _set_nested_attr(target: Any, path: str, value: Any) -> None:
     current[last] = _coerce_override_value(value, current[last])
     return
 
-  if not hasattr(current, last):
+  if is_dataclass(current):
+    if last not in current.__dataclass_fields__:
+      raise ValueError(f"Unknown attribute '{last}' while applying override '{path}'.")
+  elif last not in vars(current):
     raise ValueError(f"Unknown attribute '{last}' while applying override '{path}'.")
   existing = getattr(current, last)
   setattr(current, last, _coerce_override_value(value, existing))
@@ -373,23 +374,7 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
     print("[INFO] Native viewer enabled during training.")
 
   runner_cls = load_runner_cls(task_id) or OnPolicyRunner
-  agent_cfg_dict = cfg.agent.to_dict() if hasattr(cfg.agent, "to_dict") else asdict(cfg.agent)
-  obs_format = vec_env.get_obs_format()
-  prepare_distillation_algorithm_cfg(
-    agent_cfg=agent_cfg_dict,
-    obs_format=obs_format,
-    num_actions=vec_env.num_actions,
-    num_rewards=vec_env.num_rewards,
-  )
-  validate_distillation_runtime_cfg(
-    agent_cfg=agent_cfg_dict,
-    obs_format=obs_format,
-    num_actions=vec_env.num_actions,
-    num_rewards=vec_env.num_rewards,
-  )
-  teacher_checkpoint = validate_distillation_teacher_assets(agent_cfg=agent_cfg_dict)
-  if teacher_checkpoint is not None:
-    print(f"[INFO] Using teacher checkpoint: {teacher_checkpoint}")
+  agent_cfg_dict = cfg.agent.to_dict()
 
   runner = runner_cls(
     vec_env,
@@ -397,8 +382,7 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
     log_dir=str(log_dir),
     device=cfg.agent.device,
   )
-  if hasattr(runner, "add_git_repo_to_log"):
-    runner.add_git_repo_to_log(__file__)
+  runner.add_git_repo_to_log(__file__)
 
   if cfg.agent.resume:
     log_root_path = log_dir.parent
@@ -450,8 +434,7 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
     raise KeyboardInterrupt
 
   install_signal_numbers: list[int] = [signal.SIGINT, signal.SIGTERM]
-  if hasattr(signal, "SIGQUIT"):
-    install_signal_numbers.append(signal.SIGQUIT)
+  install_signal_numbers.append(signal.SIGQUIT)
   for signum in install_signal_numbers:
     signal_handlers_to_restore[signum] = signal.getsignal(signum)
     signal.signal(signum, _interrupt_handler)

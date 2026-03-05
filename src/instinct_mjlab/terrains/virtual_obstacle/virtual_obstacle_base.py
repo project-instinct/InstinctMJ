@@ -23,6 +23,7 @@ class VirtualObstacleCfg:
 class VirtualObstacleBase(ABC):
     def __init__(self, cfg: VirtualObstacleCfg):
         self.cfg = cfg
+        self.supports_edge_segment_generation = False
 
     @abstractmethod
     def generate(self, mesh: trimesh.Trimesh, device: torch.device | str = "cpu") -> None:
@@ -49,6 +50,14 @@ class VirtualObstacleBase(ABC):
     def visualize(self):
         """Visualize the virtual obstacle."""
         raise NotImplementedError("This method should be implemented by subclasses.")
+
+    def generate_from_edge_segments(self, edge_segments, device: torch.device | str = "cpu") -> None:
+        del edge_segments, device
+        raise NotImplementedError("This virtual obstacle does not support edge-segment generation.")
+
+    def debug_vis(self, visualizer) -> None:
+        del visualizer
+        return
 
     @abstractmethod
     def get_points_penetration_offset(self, points: torch.Tensor) -> torch.Tensor:

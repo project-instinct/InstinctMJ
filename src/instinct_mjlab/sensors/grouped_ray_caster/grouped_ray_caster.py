@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import torch
 import warp as wp
+from mujoco_warp import rays
 
 from mjlab.sensor import RayCastSensor
 
@@ -31,6 +32,16 @@ class GroupedRayCaster(RayCastSensor):
         self._needs_filter_continue = False
         self._mesh_filter_enabled: bool = False
         self._allowed_geom_lut: torch.Tensor | None = None
+        self._env_ids_grid = torch.empty(0, 0, dtype=torch.long)
+        self._ray_ids_grid = torch.empty(0, 0, dtype=torch.long)
+        self._active_hop_capacity = 0
+        self._active_hop_pnt = torch.empty(0, 0, 3)
+        self._active_hop_vec = torch.empty(0, 0, 3)
+        self._active_hop_dist = torch.empty(0, 0)
+        self._active_hop_geomid = torch.empty(0, 0, dtype=torch.int32)
+        self._active_hop_normal = torch.empty(0, 0, 3)
+        self._active_hop_bodyexclude = torch.empty(0, dtype=torch.int32)
+        self._ray_bodyexclude_value = -1
 
     def initialize(self, mj_model, model, data, device: str) -> None:
         super().initialize(mj_model, model, data, device)
@@ -53,6 +64,15 @@ class GroupedRayCaster(RayCastSensor):
 
         self.ray_starts = self._local_offsets.unsqueeze(0).repeat(self._num_envs, 1, 1).clone()
         self.ray_directions = self._local_directions.unsqueeze(0).repeat(self._num_envs, 1, 1).clone()
+        self._env_ids_grid = self._ALL_INDICES.unsqueeze(1).expand(-1, self._num_rays)
+        self._ray_ids_grid = (
+            torch.arange(self._num_rays, device=device, dtype=torch.long).unsqueeze(0).expand(self._num_envs, -1)
+        )
+        ray_bodyexclude_torch = wp.to_torch(self._ray_bodyexclude)
+        if ray_bodyexclude_torch.numel() > 0:
+            self._ray_bodyexclude_value = int(ray_bodyexclude_torch[0].item())
+        else:
+            self._ray_bodyexclude_value = -1
         self._initialize_mesh_path_filter(mj_model, device)
         self._needs_filter_continue = self._mesh_filter_enabled or self._min_distance > 0.0
 
@@ -130,8 +150,6 @@ class GroupedRayCaster(RayCastSensor):
 
     def _apply_hit_filter_and_continue(self) -> None:
         ray_geomid_torch = wp.to_torch(self._ray_geomid).view(self._num_envs, self._num_rays)
-        ray_dist_torch = wp.to_torch(self._ray_dist).view(self._num_envs, self._num_rays)
-        ray_normal_torch = wp.to_torch(self._ray_normal).view(self._num_envs, self._num_rays, 3)
 
         geom_ids = ray_geomid_torch.to(dtype=torch.long)
         hit_mask = self._distances >= 0.0
@@ -152,12 +170,11 @@ class GroupedRayCaster(RayCastSensor):
         final_hit_pos = self._hit_pos_w.clone()
         final_normals = self._normals_w.clone()
 
-        # Rejected hits are treated as "continue ray-casting" candidates.
+        # Rejected hits are initialized to miss.
         final_distances[reject_mask] = -1.0
         final_hit_pos[reject_mask] = self._cached_world_origins[reject_mask]
         final_normals[reject_mask] = 0.0
 
-        world_origins = self._cached_world_origins
         world_rays = self._cached_world_rays
         eps = self._mesh_filter_epsilon
         max_hops = self._mesh_filter_max_hops
@@ -175,53 +192,136 @@ class GroupedRayCaster(RayCastSensor):
             self._normals_w.copy_(final_normals)
             return
 
-        ray_pnt_torch = wp.to_torch(self._ray_pnt).view(self._num_envs, self._num_rays, 3)
-        ray_vec_torch = wp.to_torch(self._ray_vec).view(self._num_envs, self._num_rays, 3)
-        ray_vec_torch.copy_(world_rays)
-
         for _ in range(max_hops):
             if not torch.any(active):
                 break
 
-            ray_pnt_torch.copy_(world_origins)
-            ray_pnt_torch[active] = current_origins[active]
+            (
+                active_env_ids,
+                active_ray_ids,
+                active_distances,
+                active_geom_ids,
+                active_normals,
+            ) = self._raycast_active_rays(active=active, current_origins=current_origins, world_rays=world_rays)
 
-            self.raycast_kernel(rc=self._ctx.render_context)
-
-            hop_distances = ray_dist_torch.clone()
-            hop_geom_ids = ray_geomid_torch.to(dtype=torch.long)
-            hop_normals = ray_normal_torch.clone()
-
-            hop_hit = active & (hop_distances >= 0.0) & (hop_distances <= remaining)
-            if not torch.any(hop_hit):
+            active_remaining = remaining[active_env_ids, active_ray_ids]
+            active_hit = (active_distances >= 0.0) & (active_distances <= active_remaining)
+            if not torch.any(active_hit):
                 break
 
             if self._mesh_filter_enabled:
-                hop_allowed = torch.zeros_like(hop_hit)
-                hop_allowed[hop_hit] = self._allowed_geom_lut[hop_geom_ids[hop_hit]]
+                active_allowed = torch.zeros_like(active_hit)
+                active_allowed[active_hit] = self._allowed_geom_lut[active_geom_ids[active_hit]]
             else:
-                hop_allowed = hop_hit
+                active_allowed = active_hit
 
-            hop_hit_pos = current_origins + world_rays * hop_distances.unsqueeze(-1)
-            total_distances = traveled + hop_distances
-            hop_accept = hop_hit & hop_allowed & (total_distances > self._min_distance)
-            if torch.any(hop_accept):
-                final_distances[hop_accept] = total_distances[hop_accept]
-                final_hit_pos[hop_accept] = hop_hit_pos[hop_accept]
-                final_normals[hop_accept] = hop_normals[hop_accept]
+            active_origins = current_origins[active_env_ids, active_ray_ids]
+            active_dirs = world_rays[active_env_ids, active_ray_ids]
+            active_hit_pos = active_origins + active_dirs * active_distances.unsqueeze(-1)
+            active_total_distances = traveled[active_env_ids, active_ray_ids] + active_distances
 
-            hop_reject = hop_hit & (~hop_accept)
-            if not torch.any(hop_reject):
+            active_accept = active_hit & active_allowed & (active_total_distances > self._min_distance)
+            if torch.any(active_accept):
+                accept_env_ids = active_env_ids[active_accept]
+                accept_ray_ids = active_ray_ids[active_accept]
+                final_distances[accept_env_ids, accept_ray_ids] = active_total_distances[active_accept]
+                final_hit_pos[accept_env_ids, accept_ray_ids] = active_hit_pos[active_accept]
+                final_normals[accept_env_ids, accept_ray_ids] = active_normals[active_accept]
+
+            active_continue = active_hit & (~active_accept)
+            if not torch.any(active_continue):
                 break
 
-            current_origins[hop_reject] = hop_hit_pos[hop_reject] + world_rays[hop_reject] * eps
-            traveled[hop_reject] = traveled[hop_reject] + hop_distances[hop_reject] + eps
-            remaining[hop_reject] = self.cfg.max_distance - traveled[hop_reject]
-            active = hop_reject & (remaining > 0.0)
+            continue_env_ids = active_env_ids[active_continue]
+            continue_ray_ids = active_ray_ids[active_continue]
+            continue_hit_pos = active_hit_pos[active_continue]
+            continue_dirs = active_dirs[active_continue]
+            continue_distances = active_distances[active_continue]
+            current_origins[continue_env_ids, continue_ray_ids] = continue_hit_pos + continue_dirs * eps
+            traveled[continue_env_ids, continue_ray_ids] = (
+                traveled[continue_env_ids, continue_ray_ids] + continue_distances + eps
+            )
+            remaining[continue_env_ids, continue_ray_ids] = (
+                self.cfg.max_distance - traveled[continue_env_ids, continue_ray_ids]
+            )
+            active.zero_()
+            continue_valid = remaining[continue_env_ids, continue_ray_ids] > 0.0
+            if torch.any(continue_valid):
+                active[continue_env_ids[continue_valid], continue_ray_ids[continue_valid]] = True
 
         self._distances.copy_(final_distances)
         self._hit_pos_w.copy_(final_hit_pos)
         self._normals_w.copy_(final_normals)
+
+    def _ensure_active_hop_buffers(self, capacity: int) -> None:
+        if capacity <= self._active_hop_capacity:
+            return
+        device = self._distances.device
+        self._active_hop_pnt = torch.empty((self._num_envs, capacity, 3), device=device, dtype=torch.float32)
+        self._active_hop_vec = torch.empty((self._num_envs, capacity, 3), device=device, dtype=torch.float32)
+        self._active_hop_dist = torch.empty((self._num_envs, capacity), device=device, dtype=torch.float32)
+        self._active_hop_geomid = torch.empty((self._num_envs, capacity), device=device, dtype=torch.int32)
+        self._active_hop_normal = torch.empty((self._num_envs, capacity, 3), device=device, dtype=torch.float32)
+        self._active_hop_bodyexclude = torch.full(
+            (capacity,),
+            self._ray_bodyexclude_value,
+            device=device,
+            dtype=torch.int32,
+        )
+        self._active_hop_capacity = capacity
+
+    def _raycast_active_rays(
+        self,
+        *,
+        active: torch.Tensor,
+        current_origins: torch.Tensor,
+        world_rays: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        active_slot_ids = torch.cumsum(active.to(dtype=torch.int32), dim=1) - 1
+        active_env_ids = self._env_ids_grid[active]
+        active_ray_ids = self._ray_ids_grid[active]
+        active_slot_ids = active_slot_ids[active].to(dtype=torch.long)
+        max_active = int(active_slot_ids.max().item()) + 1
+        self._ensure_active_hop_buffers(max_active)
+
+        active_hop_pnt = self._active_hop_pnt[:, :max_active, :]
+        active_hop_vec = self._active_hop_vec[:, :max_active, :]
+        active_hop_dist = self._active_hop_dist[:, :max_active]
+        active_hop_geomid = self._active_hop_geomid[:, :max_active]
+        active_hop_normal = self._active_hop_normal[:, :max_active, :]
+        active_hop_bodyexclude = self._active_hop_bodyexclude[:max_active]
+
+        active_hop_pnt.zero_()
+        active_hop_vec.zero_()
+        active_hop_vec[..., 2] = 1.0
+        active_hop_dist.fill_(-1.0)
+        active_hop_geomid.fill_(-1)
+        active_hop_normal.zero_()
+
+        active_hop_pnt[active_env_ids, active_slot_ids] = current_origins[active]
+        active_hop_vec[active_env_ids, active_slot_ids] = world_rays[active]
+
+        rays(
+            m=self._model.struct,  # type: ignore[attr-defined]
+            d=self._data.struct,  # type: ignore[attr-defined]
+            pnt=wp.from_torch(active_hop_pnt.contiguous(), dtype=wp.vec3),
+            vec=wp.from_torch(active_hop_vec.contiguous(), dtype=wp.vec3),
+            geomgroup=self._geomgroup,  # pyright: ignore[reportArgumentType]
+            flg_static=True,
+            bodyexclude=wp.from_torch(active_hop_bodyexclude.contiguous(), dtype=wp.int32),
+            dist=wp.from_torch(active_hop_dist.contiguous(), dtype=wp.float32),
+            geomid=wp.from_torch(active_hop_geomid.contiguous(), dtype=wp.int32),
+            normal=wp.from_torch(active_hop_normal.contiguous(), dtype=wp.vec3),
+            rc=self._ctx.render_context,
+        )
+
+        return (
+            active_env_ids,
+            active_ray_ids,
+            active_hop_dist[active_env_ids, active_slot_ids],
+            active_hop_geomid[active_env_ids, active_slot_ids].to(dtype=torch.long),
+            active_hop_normal[active_env_ids, active_slot_ids],
+        )
 
     def _build_body_aliases(self) -> dict[str, set[str]]:
         body_aliases: dict[str, set[str]] = {}
