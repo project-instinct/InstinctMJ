@@ -62,7 +62,7 @@ def g1_perceptive_shadowing_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
     save_interval=1_000,
     log_interval=10,
     experiment_name="g1_perceptive_shadowing",
-    policy_observation_group="policy",
+    policy_observation_group="actor",
     critic_observation_group="critic",
   )
 
@@ -179,6 +179,6 @@ def g1_perceptive_vae_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
     save_interval=1_000,
     log_interval=10,
     experiment_name="g1_perceptive_vae",
-    policy_observation_group="policy",
+    policy_observation_group="actor",
     critic_observation_group="critic",
   )

@@ -453,7 +453,7 @@ def make_observations() -> dict[str, ObsGroupCfg]:
     """Observation specifications for the perceptive shadowing MDP."""
 
     # Policy observations
-    policy_terms = {
+    actor_terms = {
         # Currently, just a dummy observation
         "joint_pos_ref": ObsTermCfg(func=mdp.generated_commands, params={"command_name": "joint_pos_ref_command"}),
         "joint_vel_ref": ObsTermCfg(func=mdp.generated_commands, params={"command_name": "joint_vel_ref_command"}),
@@ -565,8 +565,8 @@ def make_observations() -> dict[str, ObsGroupCfg]:
     }
 
     return {
-        "policy": ObsGroupCfg(
-            terms=policy_terms,
+        "actor": ObsGroupCfg(
+            terms=actor_terms,
             enable_corruption=True,
             concatenate_terms=False,
         ),

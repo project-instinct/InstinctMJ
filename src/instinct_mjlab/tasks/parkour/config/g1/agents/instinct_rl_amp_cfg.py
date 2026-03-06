@@ -77,7 +77,7 @@ class AmpAlgoCfg(InstinctRlPpoAlgorithmCfg):
 @dataclass(kw_only=True)
 class G1ParkourPPORunnerCfg(InstinctRlOnPolicyRunnerCfg):
     num_steps_per_env: int = 24
-    policy_observation_group: str = "policy"
+    policy_observation_group: str = "actor"
     critic_observation_group: str = "critic"
     max_iterations: int = 30000
     save_interval: int = 1000

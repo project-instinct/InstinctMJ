@@ -293,7 +293,7 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
 
         camera_cfg.debug_vis = True
         self.scene.terrain.collision_debug_vis = False
-        self.observations["policy"].terms["depth_image"].params["debug_vis"] = True
+        self.observations["actor"].terms["depth_image"].params["debug_vis"] = True
         self.viewer.debug_vis_show_all_envs = True
 
         # change reset robot event with more pitch_down randomization (since the robot is facing -y axis)

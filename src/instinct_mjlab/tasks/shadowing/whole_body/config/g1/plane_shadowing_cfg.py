@@ -441,7 +441,7 @@ def _commands_cfg() -> dict[str, object]:
 
 def _observations_cfg(link_of_interests: list[str]) -> dict[str, ObservationGroupCfg]:
     return {
-        "policy": ObservationGroupCfg(
+        "actor": ObservationGroupCfg(
             terms={
                 # BeyondMimic specific reference observations
                 "joint_pos_ref": ObservationTermCfg(
@@ -934,7 +934,7 @@ def _build_run_name(cfg: InstinctLabRLEnvCfg, motion_reference_cfg: MotionRefere
             f"_{MOTION_NAME}",
             (
                 "_odomObs"
-                if ("base_lin_vel" in cfg.observations["policy"].terms.keys())
+                if ("base_lin_vel" in cfg.observations["actor"].terms.keys())
                 and cfg.commands["position_b_ref_command"].anchor_frame == "robot"
                 else ""
             ),

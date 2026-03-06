@@ -46,4 +46,3 @@ def g1_locomotion_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
     policy_observation_group="actor",
     critic_observation_group="critic",
   )
-

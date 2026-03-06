@@ -135,7 +135,7 @@ def make_vae_observations() -> dict[str, ObsGroupCfg]:
     """Observation specifications for the perceptive VAE MDP."""
 
     # Policy observations
-    policy_terms = {
+    actor_terms = {
         "depth_image": ObsTermCfg(
             func=instinct_mdp.visualizable_image,
             # params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "distance_to_image_plane"},
@@ -231,8 +231,8 @@ def make_vae_observations() -> dict[str, ObsGroupCfg]:
     }
 
     return {
-        "policy": ObsGroupCfg(
-            terms=policy_terms,
+        "actor": ObsGroupCfg(
+            terms=actor_terms,
             enable_corruption=True,
             concatenate_terms=False,
         ),
@@ -266,7 +266,7 @@ class G1PerceptiveVaeEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
         motion_reference_cfg = perceptual_cfg.get_motion_reference_cfg(self.scene)
 
         camera_cfg.data_histories["distance_to_image_plane_noised"] = 10
-        self.observations["policy"].terms["depth_image"].params["history_skip_frames"] = 3
+        self.observations["actor"].terms["depth_image"].params["history_skip_frames"] = 3
         robot_cfg.articulation.actuators = beyondmimic_g1_29dof_actuator_cfgs
         self.actions["joint_pos"].scale = beyondmimic_action_scale
         # Use sparse Jacobian explicitly to avoid dense Jacobian unsupported path for nv > 60 in mjwarp.
@@ -282,7 +282,7 @@ class G1PerceptiveVaeEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
         self.run_name = "g1PerceptiveVae" + "".join(
             [
                 f"_propHistory{PROPRIO_HISTORY_LENGTH}",
-                f"_depthHist{camera_cfg.data_histories['distance_to_image_plane_noised']}Skip{self.observations['policy'].terms['depth_image'].params['history_skip_frames']}",
+                f"_depthHist{camera_cfg.data_histories['distance_to_image_plane_noised']}Skip{self.observations['actor'].terms['depth_image'].params['history_skip_frames']}",
             ]
         )
 
@@ -349,7 +349,7 @@ class G1PerceptiveVaeEnvCfg_PLAY(G1PerceptiveVaeEnvCfg):
 
         camera_cfg.debug_vis = True
         self.scene.terrain.collision_debug_vis = False
-        self.observations["policy"].terms["depth_image"].params["debug_vis"] = True
+        self.observations["actor"].terms["depth_image"].params["debug_vis"] = True
         self.viewer.debug_vis_show_all_envs = True
 
         # change reset robot event with more pitch_down randomization (since the robot is facing -y axis)
