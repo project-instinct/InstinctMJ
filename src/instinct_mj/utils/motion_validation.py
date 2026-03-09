@@ -18,6 +18,8 @@ _TRACKING_MOTION_REQUIRED_KEYS = (
 
 
 _DEFAULT_DATASET_CANDIDATES = (
+    # NOTE: Change these defaults if your local datasets root lives elsewhere, or
+    # set `INSTINCT_DATASETS_ROOT` to override them without editing this file.
     "~/Xyk/Datasets",
     "~/Datasets",
 )

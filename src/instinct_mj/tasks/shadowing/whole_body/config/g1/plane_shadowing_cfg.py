@@ -134,6 +134,7 @@ _hacked_selected_files_ = ["fightAndSports1_subject1_retargetted.npz"]
 # NOTE: Change `MOTION_NAME`, `_hacked_selected_files_`, and the active dataset path
 # below to your local motion setup before training / play.
 MOTION_NAME = "LafanFight5Files"
+# NOTE: Change this preset dataset root if you use this motion selection block.
 _path_ = os.path.expanduser("~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz")
 _hacked_selected_files_ = [
     "fight1_subject2_retargetted.npz",
@@ -145,6 +146,7 @@ _hacked_selected_files_ = [
 
 
 MOTION_NAME = "LafanFiltered"
+# NOTE: Change this preset dataset root if you use this motion selection block.
 _path_ = os.path.expanduser("~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz")
 _hacked_selected_files_ = [
     "aiming1_subject1_retargetted.npz",  # O

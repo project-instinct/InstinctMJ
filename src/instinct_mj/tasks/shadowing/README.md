@@ -106,6 +106,32 @@ instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 \
   --checkpoint-file <checkpoint_file>
 ```
 
+### Perceptive VAE
+
+**Task IDs:**
+- `Instinct-Perceptive-Vae-G1-v0` (train)
+- `Instinct-Perceptive-Vae-G1-Play-v0` (play)
+
+1. Go to `perceptive/config/g1/perceptive_vae_cfg.py` and update the local dataset root here:
+
+    ```python
+    MOTION_FOLDER = "~/Xyk/Datasets/20251116_50cm_kneeClimbStep1"
+    ```
+
+    The VAE motion buffer and terrain generator read `MOTION_FOLDER` and the `metadata.yaml` under that directory.
+
+    - `MOTION_FOLDER`: The local folder containing the motion files and `metadata.yaml`.
+
+2. Train the policy:
+```bash
+instinct-train Instinct-Perceptive-Vae-G1-v0
+```
+
+3. Play trained policy (`--load-run` is required; absolute path is recommended, or use `--agent random` for an untrained policy):
+```bash
+instinct-play Instinct-Perceptive-Vae-G1-Play-v0 --load-run <run_name>
+```
+
 ## Common Options
 
 - `--num-envs`: Number of parallel environments (default varies by task)
