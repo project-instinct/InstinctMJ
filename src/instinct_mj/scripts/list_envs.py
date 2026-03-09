@@ -12,7 +12,7 @@ from instinct_mj.tasks.registry import list_tasks
 
 def list_environments(keyword: str | None = None) -> int:
     table = PrettyTable(["#", "Task ID"])
-    table.title = "Available Environments in Instinct_MJ"
+    table.title = "Available Environments in InstinctMJ"
     table.align["Task ID"] = "l"
 
     idx = 0

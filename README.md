@@ -1,4 +1,4 @@
-# Instinct_MJ
+# InstinctMJ
 
 [![mjlab](https://img.shields.io/badge/framework-mjlab-4C7AF2.svg)](https://github.com/mujocolab/mjlab)
 [![MuJoCo Warp](https://img.shields.io/badge/simulator-MuJoCo%20Warp-silver.svg)](https://github.com/google-deepmind/mujoco_warp)
@@ -6,7 +6,7 @@
 [![Platform](https://img.shields.io/badge/platform-linux--x86__64-orange.svg)](https://releases.ubuntu.com/)
 [![instinct_rl](https://img.shields.io/badge/training-instinct__rl-brightgreen.svg)](https://github.com/project-instinct/instinct_rl)
 
-`Instinct_MJ` builds InstinctLab task families on top of `mjlab`, which combines Isaac Lab's manager-based API with MuJoCo Warp, a GPU-accelerated version of MuJoCo.
+`InstinctMJ` builds InstinctLab task families on top of `mjlab`, which combines Isaac Lab's manager-based API with MuJoCo Warp, a GPU-accelerated version of MuJoCo.
 The package focuses on behavior-preserving task migration, expressed in native `mjlab` managers, scenes, and task registration for `instinct_rl`.
 
 **Key Features:**
@@ -24,12 +24,12 @@ This codebase is under [CC BY-NC 4.0 license](LICENSE). As with InstinctLab, you
 
 ## Attention
 
-Do not directly use checkpoints trained in InstinctLab with `Instinct_MJ`.
+Do not directly use checkpoints trained in InstinctLab with `InstinctMJ`.
 
-- `Instinct_MJ` loads the robot from XML / MJCF, and the resulting joint order is not the same as the joint order used in IsaacLab.
+- `InstinctMJ` loads the robot from XML / MJCF, and the resulting joint order is not the same as the joint order used in IsaacLab.
 - Even when the task semantics are migrated one-to-one, policy inputs / outputs tied to joint ordering are therefore not directly checkpoint-compatible.
-- In practice, InstinctLab weights should be treated as incompatible with `Instinct_MJ` unless you perform an explicit, validated joint-order remapping.
-- Please release and use weights trained in `Instinct_MJ` for `Instinct_MJ` tasks.
+- In practice, InstinctLab weights should be treated as incompatible with `InstinctMJ` unless you perform an explicit, validated joint-order remapping.
+- Please release and use weights trained in `InstinctMJ` for `InstinctMJ` tasks.
 
 ## Contributing
 
@@ -56,18 +56,18 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
   # Option 1: HTTPS
   git clone https://github.com/mujocolab/mjlab.git
   git clone https://github.com/project-instinct/instinct_rl.git
-  git clone https://github.com/cmjang/Instinct_MJ.git
+  git clone https://github.com/project-instinct/InstinctMJ.git
 
   # Option 2: SSH
   # git clone git@github.com:mujocolab/mjlab.git
   # git clone git@github.com:project-instinct/instinct_rl.git
-  # git clone git@github.com:cmjang/Instinct_MJ.git
+  # git clone git@github.com:project-instinct/InstinctMJ.git
   ```
 
 - Install the package with `uv`:
 
   ```bash
-  cd Instinct_MJ
+  cd InstinctMJ
   uv sync
   ```
 
@@ -97,7 +97,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
 - Shadowing documentation: `src/instinct_mj/tasks/shadowing/README.md`
 - BeyondMimic documentation: `src/instinct_mj/tasks/shadowing/beyondmimic/README.md`
 - Parkour documentation: `src/instinct_mj/tasks/parkour/README.md`
-- Maintained configuration notes: `logs/README.md`
 
 ### Set up IDE (Optional)
 
@@ -106,7 +105,7 @@ If VSCode / Pylance misses local imports in a multi-repository workspace, add th
 ```json
 {
   "python.analysis.extraPaths": [
-    "<workspace_dir>/Instinct_MJ/src",
+    "<workspace_dir>/InstinctMJ/src",
     "<workspace_dir>/mjlab/src",
     "<workspace_dir>/instinct_rl"
   ]
@@ -209,7 +208,7 @@ pre-commit install
 
 ## Train Your Own Projects
 
-To preserve your own experiments and logs, it is usually better to create your own task package or repository and reuse the task patterns from `Instinct_MJ`.
+To preserve your own experiments and logs, it is usually better to create your own task package or repository and reuse the task patterns from `InstinctMJ`.
 
 If you want to add a new task directly in this repository:
 
@@ -246,11 +245,10 @@ register_instinct_task(
 
 - Training logs are written to `logs/instinct_rl/<experiment_name>/<timestamp_run>/`
 - Play videos are saved under `videos/play/` in the selected run directory
-- Maintained configuration notes are tracked in `logs/README.md`
 
 ## Relationship to InstinctLab
 
-`Instinct_MJ` is the MuJoCo Warp / `mjlab` counterpart to InstinctLab in the Project-Instinct ecosystem.
+`InstinctMJ` is the MuJoCo Warp / `mjlab` counterpart to InstinctLab in the Project-Instinct ecosystem.
 
 Reference links:
 

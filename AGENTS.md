@@ -1,15 +1,15 @@
-# Agent 指南 - InstinctLab 到 mjlab 迁移（Instinct_MJ）
+# Agent 指南 - InstinctLab 到 mjlab 迁移（InstinctMJ）
 
 ## 作用范围
 
-- 本指南适用于 `Instinct_MJ/**` 下的全部内容。
+- 本指南适用于当前仓库下的全部内容。
 - 除非用户明确要求跨项目修改，否则改动应限制在本项目内。
 - `../InstinctLab/**` 与 `../mjlab/**` 默认仅用于参考。
 - 未经用户明确要求，不得修改 `../instinct_rl/**`。
 
 ## 核心目标
 
-- 在 `Instinct_MJ` 内以 mjlab 原生方式复现 InstinctLab 行为。
+- 在 `InstinctMJ` 内以 mjlab 原生方式复现 InstinctLab 行为。
 - 文件/模块命名在可行范围内尽量贴近原 InstinctLab 结构。
 - 保持本项目可作为 `instinct_rl` 的即插即用组件。
 - 迁移时优先参考 `../mjlab/**` 中相似实现，采用其原生接口与组织方式。
@@ -40,7 +40,7 @@
 
 ## 兼容性约束
 
-- 将 `Instinct_MJ` 视为 `instinct_rl` 的组件层。
+- 将 `InstinctMJ` 视为 `instinct_rl` 的组件层。
 - 避免破坏 `instinct_rl` 使用到的训练/回放入口与配置接口。
 - 若修复必须改动 `instinct_rl`，先停止并询问用户。
 

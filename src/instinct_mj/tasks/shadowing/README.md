@@ -14,7 +14,7 @@
 
 ## Prerequisite
 
-Install `mjlab` and `instinct_rl` source code first (see `Instinct_MJ/README.md` for full setup), then install this package so `instinct-train` and `instinct-play` are available.
+Install `mjlab` and `instinct_rl` source code first (see `InstinctMJ/README.md` for full setup), then install this package so `instinct-train` and `instinct-play` are available.
 
 ## Basic Usage Guidelines
 
@@ -86,7 +86,6 @@ instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --load-run <run_name>
 
 4. Current maintained setup notes in this workspace (as of `2026-03-09`):
 
-    - Config reference: `logs/README.md`
     - Pretrained weights: publish separately through Google Drive or another external file host
     - Play command:
 

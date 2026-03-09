@@ -1,13 +1,13 @@
-# Contributing to Instinct_MJ
+# Contributing to InstinctMJ
 
-Thank you for helping improve `Instinct_MJ`.
+Thank you for helping improve `InstinctMJ`.
 
 This repository is the `mjlab`-native port of InstinctLab tasks, so contributions should prioritize behavior fidelity, clear validation, and minimal, focused changes.
 
 ## Before You Start
 
 - For larger features or refactors, open an issue first so scope and compatibility can be discussed before implementation.
-- Keep changes local to `Instinct_MJ` unless the change clearly requires coordination with `mjlab` or `instinct_rl`.
+- Keep changes local to `InstinctMJ` unless the change clearly requires coordination with `mjlab` or `instinct_rl`.
 - Preserve existing task semantics unless the pull request explicitly proposes a behavior change.
 
 ## Development Setup
@@ -17,9 +17,9 @@ Clone the sibling repositories and install them in editable mode:
 ```bash
 git clone https://github.com/mujocolab/mjlab.git
 git clone https://github.com/project-instinct/instinct_rl.git
-git clone https://github.com/cmjang/Instinct_MJ.git
+git clone https://github.com/project-instinct/InstinctMJ.git
 
-cd Instinct_MJ
+cd InstinctMJ
 uv sync
 ```
 

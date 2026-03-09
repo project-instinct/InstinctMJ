@@ -1,6 +1,6 @@
-# Instinct_MJ Contributor Agreement
+# InstinctMJ Contributor Agreement
 
-Thank you for your interest in contributing to `Instinct_MJ`. By submitting a pull request, you agree to the following terms:
+Thank you for your interest in contributing to `InstinctMJ`. By submitting a pull request, you agree to the following terms:
 
 ## 1. Copyright License
 

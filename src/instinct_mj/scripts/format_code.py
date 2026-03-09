@@ -1,4 +1,4 @@
-"""Run repository formatting hooks for Instinct_MJ."""
+"""Run repository formatting hooks for InstinctMJ."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _build_arg_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
-    description="Run Instinct_MJ formatting hooks via pre-commit.",
+    description="Run InstinctMJ formatting hooks via pre-commit.",
   )
   parser.add_argument(
     "paths",
     nargs="*",
-    help="Optional files or directories relative to the Instinct_MJ repository root.",
+    help="Optional files or directories relative to the InstinctMJ repository root.",
   )
   return parser
 

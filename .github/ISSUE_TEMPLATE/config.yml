@@ -1,8 +1,0 @@
-blank_issues_enabled: true
-contact_links:
-  - name: mjlab upstream issues
-    url: https://github.com/mujocolab/mjlab/issues
-    about: Use this when the problem is clearly in mjlab rather than Instinct_MJ.
-  - name: instinct_rl upstream issues
-    url: https://github.com/project-instinct/instinct_rl/issues
-    about: Use this when the issue is in the training framework rather than the task package.
