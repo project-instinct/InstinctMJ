@@ -30,7 +30,12 @@ G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 
 # NOTE: Change this if your local perceptive shadowing dataset lives elsewhere.
 # The folder should contain the motion files and a `metadata.yaml`.
-MOTION_FOLDER = "~/Xyk/Datasets/her_leveled"
+MOTION_FOLDER = "~/your/path/to/20251116_50cm_kneeClimbStep1"
+
+# NOTE: Optional play override for perceptive shadowing.
+# Leave this as `None` to reuse `MOTION_FOLDER`, or set it to another local
+# dataset root if PLAY should point somewhere else.
+PLAY_MOTION_FOLDER_OVERRIDE = None
 
 # NOTE: For the one-motion debug task below, keep this as `None` to use the
 # first motion listed in `metadata.yaml`, or set it to a relative motion file
@@ -304,6 +309,7 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+        self.sim.mujoco.ccd_iterations = 128
 
         motion_reference_cfg = next(
             sensor_cfg for sensor_cfg in self.scene.sensors if sensor_cfg.name == "motion_reference"
@@ -318,9 +324,11 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
         motion_reference_cfg.motion_buffers[MOTION_NAME].motion_bin_length_s = None
         motion_reference_cfg.motion_buffers[MOTION_NAME].env_starting_stub_sampling_strategy = "independent"
         # self.scene.motion_reference.motion_buffers[MOTION_NAME].path = (
-        #     "/localhdd/Datasets/NoKov-Marslab-Motions-instinctnpz/20251116_50cm_kneeClimbStep1/20251106_diveroll4_roadRamp_noWall"
+        #     "/your/path/to/20251116_50cm_kneeClimbStep1/20251106_diveroll4_roadRamp_noWall"
         # )
         motion_buffer = motion_reference_cfg.motion_buffers[MOTION_NAME]
+        if PLAY_MOTION_FOLDER_OVERRIDE is not None:
+            motion_buffer.path = os.path.expanduser(PLAY_MOTION_FOLDER_OVERRIDE)
         motion_buffer.metadata_yaml = os.path.join(motion_buffer.path, "metadata.yaml")
         if self.scene.terrain.terrain_type == "hacked_generator":
             terrain_cfg = self.scene.terrain.terrain_generator.sub_terrains["motion_matched"]

@@ -188,7 +188,7 @@ Before training or playing parkour tasks, update the local dataset root in
 `src/instinct_mj/tasks/parkour/config/g1/g1_parkour_target_amp_cfg.py`:
 
 ```python
-_PARKOUR_DATASET_DIR = os.path.expanduser("~/Xyk/Datasets/data&model/parkour_motion_reference")
+_PARKOUR_DATASET_DIR = os.path.expanduser("~/your/path/to/parkour_motion_reference")
 ```
 
 If your filtered motion list is stored elsewhere, also update

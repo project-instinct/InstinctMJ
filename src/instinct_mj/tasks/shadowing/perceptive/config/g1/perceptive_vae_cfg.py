@@ -43,6 +43,11 @@ MOTION_FOLDER = (
     # "~/your/path/to/20251116_50cm_kneeClimbStep1/20251106_diveroll4_roadRamp_noWall"
 )
 
+# NOTE: Temporary local play override for perceptive VAE.
+# Leave this as `None` to reuse `MOTION_FOLDER`, or set it to another local
+# dataset root if PLAY should point somewhere else.
+PLAY_MOTION_FOLDER_OVERRIDE = None
+
 
 @dataclass(kw_only=True)
 class TerrainMotionCfg(TerrainMotionCfgBase):
@@ -311,10 +316,10 @@ class G1PerceptiveVaeEnvCfg_PLAY(G1PerceptiveVaeEnvCfg):
         motion_reference_cfg.motion_buffers[MOTION_NAME].motion_bin_length_s = None
         motion_reference_cfg.motion_buffers[MOTION_NAME].env_starting_stub_sampling_strategy = "independent"
         # self.scene.motion_reference.motion_buffers[MOTION_NAME].path = (
-        #     "/localhdd/Datasets/NoKov-Marslab-Motions-instinctnpz/20251115_diveRoll4_kneelClimb_jumpSit_rollVault"
+        #     "/your/path/to/20251115_diveRoll4_kneelClimb_jumpSit_rollVault"
         # )
         # self.scene.motion_reference.motion_buffers[MOTION_NAME].metadata_yaml = (
-        #     "/localhdd/Datasets/NoKov-Marslab-Motions-instinctnpz/20251115_diveRoll4_kneelClimb_jumpSit_rollVault/metadata.yaml"
+        #     "/your/path/to/20251115_diveRoll4_kneelClimb_jumpSit_rollVault/metadata.yaml"
         # )
         # self.scene.terrain.terrain_generator.sub_terrains["motion_matched"].path = (
         #     self.scene.motion_reference.motion_buffers[MOTION_NAME].path
@@ -322,6 +327,13 @@ class G1PerceptiveVaeEnvCfg_PLAY(G1PerceptiveVaeEnvCfg):
         # self.scene.terrain.terrain_generator.sub_terrains["motion_matched"].metadata_yaml = (
         #     self.scene.motion_reference.motion_buffers[MOTION_NAME].metadata_yaml
         # )
+        motion_buffer = motion_reference_cfg.motion_buffers[MOTION_NAME]
+        if PLAY_MOTION_FOLDER_OVERRIDE is not None:
+            motion_buffer.path = os.path.expanduser(PLAY_MOTION_FOLDER_OVERRIDE)
+        motion_buffer.metadata_yaml = os.path.join(motion_buffer.path, "metadata.yaml")
+        terrain_cfg = self.scene.terrain.terrain_generator.sub_terrains["motion_matched"]
+        terrain_cfg.path = motion_buffer.path
+        terrain_cfg.metadata_yaml = motion_buffer.metadata_yaml
 
         # Use non-terrain-matching motion and plane to hack the scene.
         self.scene.terrain.terrain_generator.num_rows = 6

@@ -171,9 +171,8 @@ def g1_perceptive_vae_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
             teacher_policy_class_name="EncoderActorCritic",
             teacher_policy=_perceptive_vae_teacher_policy_cfg(),
             teacher_logdir=(
-                "~/Data/instinct_mj_logs/instinct_rl/g1_perceptive_shadowing/"
-                "20260111_103654_g1Perceptive_4MotionsKneelClimbStep1_concatMotionBins__GPU0_"
-                "from20260108_032900"
+                "~/your/path/to/instinct_mj_logs/instinct_rl/g1_perceptive_shadowing/"
+                "your_teacher_run"
             ),
         ),
         normalizers={
