@@ -971,5 +971,8 @@ class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
         # relying on MujocoCfg global defaults (100/50).
         self.sim.mujoco.iterations = 10
         self.sim.mujoco.ls_iterations = 20
+        # MuJoCo 3.5's native CCD can exhaust the old 128-iteration ceiling on
+        # the motion-matched perceptive terrain.
+        self.sim.mujoco.ccd_iterations = 128
         self.sim.nconmax = 128
         self.sim.njmax = 512

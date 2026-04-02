@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 import torch
 import warp as wp
-from mjlab.sensor import RayCastSensor
+from mjlab.sensor import ObjRef, RayCastData, RayCastSensor, SensorContext
 from mujoco_warp import rays
 
 if TYPE_CHECKING:
     from .grouped_ray_caster_cfg import GroupedRayCasterCfg
+
+
+@dataclass
+class _AttachmentFrameMetadata:
+    frame_type: Literal["body", "site", "geom"]
+    obj_id: int
+    body_id: int
+    frame_local_pos: torch.Tensor
 
 
 class GroupedRayCaster(RayCastSensor):
@@ -40,9 +49,22 @@ class GroupedRayCaster(RayCastSensor):
         self._active_hop_normal = torch.empty(0, 0, 3)
         self._active_hop_bodyexclude = torch.empty(0, dtype=torch.int32)
         self._ray_bodyexclude_value = -1
+        self._attachment_frame_metadata: _AttachmentFrameMetadata | None = None
+        self._runtime_mj_model = None
+        self._runtime_model = None
+        self._runtime_data = None
+        self._runtime_ctx: SensorContext | None = None
+        self._runtime_device: str | None = None
+        self._runtime_wp_device = None
 
     def initialize(self, mj_model, model, data, device: str) -> None:
         super().initialize(mj_model, model, data, device)
+        self._runtime_mj_model = mj_model
+        self._runtime_model = model
+        self._runtime_data = data
+        self._runtime_device = device
+        self._runtime_wp_device = wp.get_device(device)
+        self._attachment_frame_metadata = self._resolve_attachment_frame_metadata(mj_model, device)
 
         self._min_distance = float(self.cfg.min_distance)
         if self._min_distance < 0.0:
@@ -70,6 +92,14 @@ class GroupedRayCaster(RayCastSensor):
         self._initialize_mesh_path_filter(mj_model, device)
         self._needs_filter_continue = self._mesh_filter_enabled or self._min_distance > 0.0
 
+    @property
+    def raycast_data(self) -> RayCastData:
+        return RayCastSensor._compute_data(self)
+
+    def set_context(self, ctx: SensorContext) -> None:
+        super().set_context(ctx)
+        self._runtime_ctx = ctx
+
     def prepare_rays(self) -> None:
         """PRE-GRAPH: Transform per-env local rays to world frame."""
         frame_pos, frame_mat = self._compute_attached_frame_world_pose()
@@ -88,37 +118,56 @@ class GroupedRayCaster(RayCastSensor):
             world_origins = world_origins + self.drift.unsqueeze(1)
             frame_pos = frame_pos + self.drift
 
-        pnt_torch = wp.to_torch(self._ray_pnt).view(self._num_envs, self._num_rays, 3)
-        vec_torch = wp.to_torch(self._ray_vec).view(self._num_envs, self._num_rays, 3)
-        pnt_torch.copy_(world_origins)
-        vec_torch.copy_(ray_directions_w)
+        self._write_world_rays_to_backend(world_origins, ray_directions_w)
 
         self._cached_world_origins = world_origins
         self._cached_world_rays = ray_directions_w
         self._cached_frame_pos = frame_pos
         self._cached_frame_mat = frame_mat
 
-    def _get_single_frame_info(self) -> tuple[Literal["body", "site", "geom"], int, int]:
-        if len(self._frame_infos) != 1:
+    def _resolve_attachment_frame_metadata(
+        self,
+        mj_model,
+        device: str,
+    ) -> _AttachmentFrameMetadata:
+        frames = self.cfg.frame
+        if isinstance(frames, ObjRef):
+            frames = (frames,)
+        if len(frames) != 1:
             raise ValueError(
                 "GroupedRayCaster currently supports exactly one attachment frame. "
-                f"Received {len(self._frame_infos)} frames for sensor '{self.cfg.name}'."
+                f"Received {len(frames)} frames for sensor '{self.cfg.name}'."
             )
-        return self._frame_infos[0]
-
-    def _get_frame_local_pos(
-        self,
-        frame_type: Literal["body", "site", "geom"],
-        obj_id: int,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        if frame_type == "site":
-            local_pos = self._mj_model.site_pos[obj_id]
+        frame = frames[0]
+        frame_name = frame.prefixed_name()
+        frame_type: Literal["body", "site", "geom"] = frame.type
+        if frame_type == "body":
+            obj_id = mj_model.body(frame_name).id
+            body_id = obj_id
+            frame_local_pos = torch.zeros(3, device=device, dtype=torch.float32)
+        elif frame_type == "site":
+            obj_id = mj_model.site(frame_name).id
+            body_id = int(mj_model.site_bodyid[obj_id])
+            frame_local_pos = torch.tensor(mj_model.site_pos[obj_id], device=device, dtype=torch.float32)
         elif frame_type == "geom":
-            local_pos = self._mj_model.geom_pos[obj_id]
+            obj_id = mj_model.geom(frame_name).id
+            body_id = int(mj_model.geom_bodyid[obj_id])
+            frame_local_pos = torch.tensor(mj_model.geom_pos[obj_id], device=device, dtype=torch.float32)
         else:
-            local_pos = (0.0, 0.0, 0.0)
-        return torch.tensor(local_pos, device=self._device, dtype=dtype)
+            raise ValueError(
+                f"GroupedRayCaster frame must be 'body', 'site', or 'geom', got '{frame.type}' "
+                f"for sensor '{self.cfg.name}'."
+            )
+        return _AttachmentFrameMetadata(
+            frame_type=frame_type,
+            obj_id=obj_id,
+            body_id=body_id,
+            frame_local_pos=frame_local_pos,
+        )
+
+    def _require_attachment_frame_metadata(self) -> _AttachmentFrameMetadata:
+        assert self._attachment_frame_metadata is not None
+        return self._attachment_frame_metadata
 
     def _compute_attached_frame_world_pose(
         self,
@@ -126,22 +175,28 @@ class GroupedRayCaster(RayCastSensor):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if env_ids is None:
             env_ids = self._ALL_INDICES
-        env_ids = torch.as_tensor(env_ids, device=self._device, dtype=torch.long)
-        frame_type, obj_id, body_id = self._get_single_frame_info()
+        device = self._runtime_device
+        runtime_data = self._runtime_data
+        metadata = self._require_attachment_frame_metadata()
+        assert device is not None and runtime_data is not None
+        env_ids = torch.as_tensor(env_ids, device=device, dtype=torch.long)
+        frame_type = metadata.frame_type
+        obj_id = metadata.obj_id
+        body_id = metadata.body_id
         if frame_type == "body":
-            frame_pos = self._data.xpos[env_ids, body_id]
-            frame_mat = self._data.xmat[env_ids, body_id].view(-1, 3, 3)
+            frame_pos = runtime_data.xpos[env_ids, body_id]
+            frame_mat = runtime_data.xmat[env_ids, body_id].view(-1, 3, 3)
         else:
-            body_pos = self._data.xpos[env_ids, body_id]
-            body_mat = self._data.xmat[env_ids, body_id].view(-1, 3, 3)
+            body_pos = runtime_data.xpos[env_ids, body_id]
+            body_mat = runtime_data.xmat[env_ids, body_id].view(-1, 3, 3)
             if frame_type == "site":
-                frame_mat = self._data.site_xmat[env_ids, obj_id].view(-1, 3, 3)
+                frame_mat = runtime_data.site_xmat[env_ids, obj_id].view(-1, 3, 3)
             else:
-                frame_mat = self._data.geom_xmat[env_ids, obj_id].view(-1, 3, 3)
+                frame_mat = runtime_data.geom_xmat[env_ids, obj_id].view(-1, 3, 3)
             # Keep InstinctLab semantics: the attached frame origin comes from the
             # parent body's full pose plus the local site/geom offset. ray_alignment
             # only affects how ray starts/directions are rotated below.
-            frame_local_pos = self._get_frame_local_pos(frame_type, obj_id, body_mat.dtype)
+            frame_local_pos = metadata.frame_local_pos.to(dtype=body_mat.dtype)
             frame_pos = body_pos + torch.einsum("bij,j->bi", body_mat, frame_local_pos)
         return frame_pos, frame_mat
 
@@ -181,10 +236,9 @@ class GroupedRayCaster(RayCastSensor):
         self._mesh_filter_enabled = True
 
     def _apply_hit_filter_and_continue(self) -> None:
-        ray_geomid_torch = wp.to_torch(self._ray_geomid).view(self._num_envs, self._num_rays)
-
-        geom_ids = ray_geomid_torch.to(dtype=torch.long)
-        hit_mask = self._distances >= 0.0
+        geom_ids = self._read_backend_hit_geom_ids().to(dtype=torch.long)
+        distances, hit_pos_w, normals_w = self._get_mutable_raycast_outputs()
+        hit_mask = distances >= 0.0
         if not torch.any(hit_mask):
             return
 
@@ -194,13 +248,13 @@ class GroupedRayCaster(RayCastSensor):
         else:
             allowed_mask = torch.ones_like(hit_mask)
 
-        reject_mask = hit_mask & ((~allowed_mask) | (self._distances <= self._min_distance))
+        reject_mask = hit_mask & ((~allowed_mask) | (distances <= self._min_distance))
         if not torch.any(reject_mask):
             return
 
-        final_distances = self._distances.clone()
-        final_hit_pos = self._hit_pos_w.clone()
-        final_normals = self._normals_w.clone()
+        final_distances = distances.clone()
+        final_hit_pos = hit_pos_w.clone()
+        final_normals = normals_w.clone()
 
         # Rejected hits are initialized to miss.
         final_distances[reject_mask] = -1.0
@@ -211,17 +265,15 @@ class GroupedRayCaster(RayCastSensor):
         eps = self._mesh_filter_epsilon
         max_hops = self._mesh_filter_max_hops
 
-        current_origins = self._hit_pos_w.clone()
-        current_origins[reject_mask] = self._hit_pos_w[reject_mask] + world_rays[reject_mask] * eps
+        current_origins = hit_pos_w.clone()
+        current_origins[reject_mask] = hit_pos_w[reject_mask] + world_rays[reject_mask] * eps
 
-        traveled = torch.zeros_like(self._distances)
-        traveled[reject_mask] = self._distances[reject_mask] + eps
+        traveled = torch.zeros_like(distances)
+        traveled[reject_mask] = distances[reject_mask] + eps
         remaining = self.cfg.max_distance - traveled
         active = reject_mask & (remaining > 0.0)
         if not torch.any(active):
-            self._distances.copy_(final_distances)
-            self._hit_pos_w.copy_(final_hit_pos)
-            self._normals_w.copy_(final_normals)
+            self._update_mutable_raycast_outputs(final_distances, final_hit_pos, final_normals)
             return
 
         for _ in range(max_hops):
@@ -281,14 +333,13 @@ class GroupedRayCaster(RayCastSensor):
             if torch.any(continue_valid):
                 active[continue_env_ids[continue_valid], continue_ray_ids[continue_valid]] = True
 
-        self._distances.copy_(final_distances)
-        self._hit_pos_w.copy_(final_hit_pos)
-        self._normals_w.copy_(final_normals)
+        self._update_mutable_raycast_outputs(final_distances, final_hit_pos, final_normals)
 
     def _ensure_active_hop_buffers(self, capacity: int) -> None:
         if capacity <= self._active_hop_capacity:
             return
-        device = self._distances.device
+        distances, _, _ = self._get_mutable_raycast_outputs()
+        device = distances.device
         self._active_hop_pnt = torch.empty((self._num_envs, capacity, 3), device=device, dtype=torch.float32)
         self._active_hop_vec = torch.empty((self._num_envs, capacity, 3), device=device, dtype=torch.float32)
         self._active_hop_dist = torch.empty((self._num_envs, capacity), device=device, dtype=torch.float32)
@@ -346,9 +397,13 @@ class GroupedRayCaster(RayCastSensor):
         active_hop_geomid[active_env_ids, active_slot_ids] = -1
         active_hop_normal[active_env_ids, active_slot_ids] = 0.0
 
+        runtime_model = self._runtime_model
+        runtime_data = self._runtime_data
+        render_context = self._get_backend_render_context()
+        assert runtime_model is not None and runtime_data is not None
         rays(
-            m=self._model.struct,  # type: ignore[attr-defined]
-            d=self._data.struct,  # type: ignore[attr-defined]
+            m=runtime_model.struct,  # type: ignore[attr-defined]
+            d=runtime_data.struct,  # type: ignore[attr-defined]
             pnt=wp.from_torch(active_hop_pnt.contiguous(), dtype=wp.vec3),
             vec=wp.from_torch(active_hop_vec.contiguous(), dtype=wp.vec3),
             geomgroup=self._geomgroup,  # pyright: ignore[reportArgumentType]
@@ -357,7 +412,7 @@ class GroupedRayCaster(RayCastSensor):
             dist=wp.from_torch(active_hop_dist.contiguous(), dtype=wp.float32),
             geomid=wp.from_torch(active_hop_geomid.contiguous(), dtype=wp.int32),
             normal=wp.from_torch(active_hop_normal.contiguous(), dtype=wp.vec3),
-            rc=self._ctx.render_context,
+            rc=render_context,
         )
 
         return (
@@ -367,6 +422,36 @@ class GroupedRayCaster(RayCastSensor):
             active_hop_geomid[active_env_ids, active_slot_ids].to(dtype=torch.long),
             active_hop_normal[active_env_ids, active_slot_ids],
         )
+
+    def _write_world_rays_to_backend(self, world_origins: torch.Tensor, world_rays: torch.Tensor) -> None:
+        assert self._ray_pnt is not None and self._ray_vec is not None
+        pnt_torch = wp.to_torch(self._ray_pnt).view(self._num_envs, self._num_rays, 3)
+        vec_torch = wp.to_torch(self._ray_vec).view(self._num_envs, self._num_rays, 3)
+        pnt_torch.copy_(world_origins)
+        vec_torch.copy_(world_rays)
+
+    def _read_backend_hit_geom_ids(self) -> torch.Tensor:
+        assert self._ray_geomid is not None
+        return wp.to_torch(self._ray_geomid).view(self._num_envs, self._num_rays)
+
+    def _get_mutable_raycast_outputs(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        assert self._distances is not None and self._hit_pos_w is not None and self._normals_w is not None
+        return self._distances, self._hit_pos_w, self._normals_w
+
+    def _update_mutable_raycast_outputs(
+        self,
+        distances: torch.Tensor,
+        hit_pos_w: torch.Tensor,
+        normals_w: torch.Tensor,
+    ) -> None:
+        backend_distances, backend_hit_pos_w, backend_normals_w = self._get_mutable_raycast_outputs()
+        backend_distances.copy_(distances)
+        backend_hit_pos_w.copy_(hit_pos_w)
+        backend_normals_w.copy_(normals_w)
+
+    def _get_backend_render_context(self):
+        assert self._runtime_ctx is not None
+        return self._runtime_ctx.render_context
 
     def _build_body_aliases(self) -> dict[str, set[str]]:
         body_aliases: dict[str, set[str]] = {}
