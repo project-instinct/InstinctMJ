@@ -44,7 +44,6 @@ from instinct_mj.assets.unitree_g1 import (
     G1_29Dof_TorsoBase_symmetric_augmentation_joint_reverse_buf,
     beyondmimic_action_scale,
     beyondmimic_g1_29dof_delayed_actuator_cfgs,
-    get_g1_assets,
 )
 from instinct_mj.motion_reference import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.motion_files.amass_motion_cfg import AmassMotionCfg as AmassMotionCfgBase
@@ -139,7 +138,6 @@ def _parkour_g1_with_shoe_spec() -> mujoco.MjSpec:
     spec = mujoco.MjSpec.from_file(
         os.path.abspath(f"{__file_dir__}/../../mjcf/g1_29dof_torsoBase_popsicle_with_shoe.xml")
     )
-    spec.assets = get_g1_assets(spec.meshdir)
     # Remove embedded per-robot lights to avoid localized over-bright spots.
     for body in spec.bodies:
         for light in tuple(body.lights):

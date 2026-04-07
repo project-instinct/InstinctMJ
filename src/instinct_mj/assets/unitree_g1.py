@@ -8,7 +8,6 @@ import os
 import mujoco
 from mjlab.actuator import ActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
-from mjlab.utils.os import update_assets
 
 from instinct_mj.actuators import DelayedInstinctActuatorCfg, InstinctActuatorCfg
 
@@ -59,20 +58,9 @@ joint name order:
 # This keeps all mjlab tensors and motion-reference augmentation in one order.
 
 
-def get_g1_assets(meshdir: str | None) -> dict[str, bytes]:
-    """Load local G1 mesh assets keyed with MuJoCo meshdir prefix."""
-    assets: dict[str, bytes] = {}
-    # Normalize meshdir so attached specs don't get asset keys like "../meshes//robot/...".
-    normalized_meshdir = meshdir.rstrip("/") if meshdir else None
-    update_assets(assets, G1_MESHES_DIR, normalized_meshdir)
-    return assets
-
-
 def get_g1_spec() -> mujoco.MjSpec:
     """Load the local g1_29dof_torsobase_popsicle.xml as MjSpec."""
-    spec = mujoco.MjSpec.from_file(G1_MJCF_PATH)
-    spec.assets = get_g1_assets(spec.meshdir)
-    return spec
+    return mujoco.MjSpec.from_file(G1_MJCF_PATH)
 
 
 # Initial state matching InstinctLab G1_29DOF_TORSOBASE_CFG (simplified variant).
@@ -550,6 +538,5 @@ __all__ = [
     "beyondmimic_g1_29dof_actuator_cfgs",
     "beyondmimic_g1_29dof_delayed_actuator_cfgs",
     "get_g1_spec",
-    "get_g1_assets",
     "g1_29dof_torsobase_delayed_actuator_cfgs",
 ]

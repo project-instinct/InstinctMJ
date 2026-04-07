@@ -1053,7 +1053,7 @@ requires-dist = [
     { name = "gymnasium", specifier = ">=0.29" },
     { name = "instinct-rl", git = "https://github.com/project-instinct/instinct_rl.git" },
     { name = "mediapy", specifier = ">=1.2.0" },
-    { name = "mjlab", git = "https://github.com/mujocolab/mjlab.git?rev=1272269a501ff689a32eaf10669848a50cfdb388" },
+    { name = "mjlab", git = "https://github.com/mujocolab/mjlab.git?rev=ce4ab5847f7e653178953f09b1ef945fbabd9704" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "numpy-quaternion" },
     { name = "onnxruntime" },
@@ -1679,7 +1679,7 @@ wheels = [
 [[package]]
 name = "mjlab"
 version = "1.2.0"
-source = { git = "https://github.com/mujocolab/mjlab.git?rev=1272269a501ff689a32eaf10669848a50cfdb388#1272269a501ff689a32eaf10669848a50cfdb388" }
+source = { git = "https://github.com/mujocolab/mjlab.git?rev=ce4ab5847f7e653178953f09b1ef945fbabd9704#ce4ab5847f7e653178953f09b1ef945fbabd9704" }
 dependencies = [
     { name = "imageio-ffmpeg" },
     { name = "mediapy" },
@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "mjviser"
-version = "0.0.9"
+version = "0.0.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mujoco", version = "3.7.0.dev889187898", source = { registry = "https://py.mujoco.org/" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
@@ -1715,9 +1715,9 @@ dependencies = [
     { name = "trimesh" },
     { name = "viser" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/57/b4/343a19e914b1a5a18b12a2852a4a78d40beeebf7d6d9ccf43f08c51cbb18/mjviser-0.0.9.tar.gz", hash = "sha256:ff2c5d477c360738b8b0df1c891e79aaaf8db880843f93b219727c92a52dc05f", size = 29003, upload-time = "2026-03-31T16:07:10.191Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/c4/7de1e89d8abc19785e307eebc0990cee9d76e9e045a654f425b3cef2f595/mjviser-0.0.11.tar.gz", hash = "sha256:aebc12785995d4fe1aa3e46cb13f0e464dfd8abe9f63d30ebe77f78767e8cedf", size = 29193, upload-time = "2026-04-02T03:32:01.777Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/34/cba1de59a799100c084f7614b93ae7921ba14db609e04c274f90e21c405e/mjviser-0.0.9-py3-none-any.whl", hash = "sha256:19a1a27f17ddf10bde513a8d77222b4c1d02c8cacf61e3e581a877d6361a1049", size = 31489, upload-time = "2026-03-31T16:07:08.761Z" },
+    { url = "https://files.pythonhosted.org/packages/71/da/116ec59e1de628fbd6330e21d05452d6755f5ab0b55c55a2b37c81ec0868/mjviser-0.0.11-py3-none-any.whl", hash = "sha256:8c4ed7570e0e74171a983cb1603329315fcc46ace0a24d47ab1fde2044a56b59", size = 31937, upload-time = "2026-04-02T03:32:02.717Z" },
 ]
 
 [[package]]

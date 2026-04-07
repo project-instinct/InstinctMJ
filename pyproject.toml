@@ -60,7 +60,7 @@ url = "https://py.mujoco.org"
 explicit = true
 
 [tool.uv.sources]
-mjlab = { git = "https://github.com/mujocolab/mjlab.git", rev = "1272269a501ff689a32eaf10669848a50cfdb388" }
+mjlab = { git = "https://github.com/mujocolab/mjlab.git", rev = "ce4ab5847f7e653178953f09b1ef945fbabd9704" }
 instinct_rl = { git = "https://github.com/project-instinct/instinct_rl.git" }
 mujoco = { index = "mujoco" }
 mujoco-warp = { git = "https://github.com/google-deepmind/mujoco_warp", rev = "875c4caf06d71b12b2036c327e7a07ce08a78b9a" }

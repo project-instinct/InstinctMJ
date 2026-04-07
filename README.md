@@ -40,7 +40,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
 ## Installation
 
 - Install `mjlab` first by following the upstream setup instructions in the [mjlab repository](https://github.com/mujocolab/mjlab).
-- This repository is currently validated against `mjlab` commit `6abd0ebfde7ef07b3ecb6032c0efe3fda2794c5c`.
+- This repository is currently validated against `mjlab` commit `ce4ab5847f7e653178953f09b1ef945fbabd9704`.
 
 - Install `instinct_rl` by following the [instinct_rl README](https://github.com/project-instinct/instinct_rl/blob/main/README.md).
   TL; DR:
@@ -61,7 +61,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
   git clone https://github.com/project-instinct/instinct_rl.git
   git clone https://github.com/project-instinct/InstinctMJ.git
   cd mjlab
-  git checkout 6abd0ebfde7ef07b3ecb6032c0efe3fda2794c5c
+  git checkout ce4ab5847f7e653178953f09b1ef945fbabd9704
   cd ..
 
   # Option 2: SSH
@@ -88,7 +88,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
 - Or install editable packages from the public repositories with `pip`:
 
   ```bash
-  pip install -e "git+https://github.com/mujocolab/mjlab.git@6abd0ebfde7ef07b3ecb6032c0efe3fda2794c5c#egg=mjlab"
+  pip install -e "git+https://github.com/mujocolab/mjlab.git@ce4ab5847f7e653178953f09b1ef945fbabd9704#egg=mjlab"
   pip install -e "git+https://github.com/project-instinct/instinct_rl.git#egg=instinct_rl"
   pip install -e .
   ```
