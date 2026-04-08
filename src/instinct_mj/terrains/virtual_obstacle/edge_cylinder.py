@@ -314,7 +314,8 @@ class EdgeCylinder(VirtualObstacleBase):
         rgba = _marker_rgba_from_cfg(marker_cfg)
         radius = float(self.cfg.cylinder_radius)
         edge_rows = _sample_debug_rows(self.edges_pyt, _remaining_debug_geom_capacity(visualizer))
-        for edge in edge_rows:
+        edge_rows_np = edge_rows.cpu().numpy()
+        for edge in edge_rows_np:
             visualizer.add_cylinder(
                 start=edge[:3],
                 end=edge[3:6],
@@ -867,7 +868,8 @@ class RayEdgeCylinder(VirtualObstacleBase):
             cylinder_rgba = _marker_rgba_from_cfg(cylinder_marker_cfg)
             radius = float(self.cfg.cylinder_radius)
             edge_rows = _sample_debug_rows(self.edges_pyt, remaining_capacity)
-            for edge in edge_rows:
+            edge_rows_np = edge_rows.cpu().numpy()
+            for edge in edge_rows_np:
                 visualizer.add_cylinder(
                     start=edge[:3],
                     end=edge[3:6],
@@ -882,7 +884,8 @@ class RayEdgeCylinder(VirtualObstacleBase):
             sphere_rgba = _marker_rgba_from_cfg(sphere_marker_cfg)
             sphere_radius = float(sphere_marker_cfg.radius)
             point_rows = _sample_debug_rows(self.points_list, remaining_capacity)
-            for point in point_rows:
+            point_rows_np = point_rows.cpu().numpy()
+            for point in point_rows_np:
                 visualizer.add_sphere(
                     center=point,
                     radius=sphere_radius,

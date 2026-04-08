@@ -11,6 +11,7 @@ from instinct_mj.envs.mdp.rewards.regularizations import (
     applied_torque_limits_by_ratio as _applied_torque_limits_by_ratio_general,
 )
 from instinct_mj.envs.mdp.rewards.regularizations import motors_power_square as _motors_power_square_general
+from instinct_mj.envs.mdp.rewards.regularizations import _unwrap_base_actuator
 
 if TYPE_CHECKING:
     from mjlab.entity import Entity
@@ -301,7 +302,7 @@ def joint_vel_limits(
 
     joint_vel_limits = torch.zeros_like(asset.data.joint_vel)
     for actuator in asset.actuators:
-        base_actuator = actuator.base_actuator
+        base_actuator = _unwrap_base_actuator(actuator)
         target_ids = base_actuator.target_ids
         joint_vel_limits[:, target_ids] = float(base_actuator.cfg.velocity_limit)
 

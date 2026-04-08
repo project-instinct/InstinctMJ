@@ -119,7 +119,7 @@ class _MjlabMarkerVisualizer:
             for idx in indices:
                 radius = base_radius * float(scales_t[idx, 0])
                 self._visualizer.add_sphere(
-                    center=translations_t[idx],
+                    center=translations_t[idx].cpu().numpy(),
                     radius=radius,
                     color=marker_color,
                 )
@@ -133,8 +133,8 @@ class _MjlabMarkerVisualizer:
                 start = translations_t[idx]
                 end = start + up_axis * (base_height * float(scales_t[idx, 2]))
                 self._visualizer.add_cylinder(
-                    start=start,
-                    end=end,
+                    start=start.cpu().numpy(),
+                    end=end.cpu().numpy(),
                     radius=base_radius * float(scales_t[idx, 0]),
                     color=marker_color,
                 )
@@ -151,8 +151,8 @@ class _MjlabMarkerVisualizer:
                 start = translations_t[idx]
                 end = start + direction * (base_length * float(scales_t[idx, 0]))
                 self._visualizer.add_arrow(
-                    start=start,
-                    end=end,
+                    start=start.cpu().numpy(),
+                    end=end.cpu().numpy(),
                     color=marker_color,
                     width=base_width,
                 )
@@ -165,8 +165,8 @@ class _MjlabMarkerVisualizer:
         base_frame_scale = float(marker_scale[0])
         for idx in indices:
             self._visualizer.add_frame(
-                position=translations_t[idx],
-                rotation_matrix=rot_mats[idx],
+                position=translations_t[idx].cpu().numpy(),
+                rotation_matrix=rot_mats[idx].cpu().numpy(),
                 scale=base_frame_scale * float(scales_t[idx, 0]),
             )
 

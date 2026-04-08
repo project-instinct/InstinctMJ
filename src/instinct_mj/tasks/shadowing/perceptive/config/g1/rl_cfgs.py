@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from instinct_mj.rl import (
     InstinctRlActorCriticCfg,
     InstinctRlNormalizerCfg,
@@ -170,9 +172,8 @@ def g1_perceptive_vae_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
             teacher_act_prob=0.2,
             teacher_policy_class_name="EncoderActorCritic",
             teacher_policy=_perceptive_vae_teacher_policy_cfg(),
-            teacher_logdir=(
-                "~/your/path/to/instinct_mj_logs/instinct_rl/g1_perceptive_shadowing/"
-                "your_teacher_run"
+            teacher_logdir=os.path.expanduser(
+                "~/Xyk/Project-Instinct/InstinctMJ/logs/instinct_rl/g1_perceptive_shadowing/2026-03-07_15-29-45"
             ),
         ),
         normalizers={

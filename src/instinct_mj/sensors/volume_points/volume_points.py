@@ -220,10 +220,12 @@ class VolumePoints(Sensor[VolumePointsData]):
 
         normal_points = points[~penetrated]
         penetrated_points = points[penetrated]
+        normal_points_np = normal_points.cpu().numpy()
+        penetrated_points_np = penetrated_points.cpu().numpy()
 
-        for point in normal_points:
+        for point in normal_points_np:
             visualizer.add_sphere(center=point, radius=normal_radius, color=normal_color)
-        for point in penetrated_points:
+        for point in penetrated_points_np:
             visualizer.add_sphere(center=point, radius=penetrated_radius, color=penetrated_color)
 
     # -- private helpers --

@@ -1136,14 +1136,15 @@ class MotionReferenceManager(Sensor):
                     (0.0, 1.0, 0.0),  # Y axis
                     (0.0, 0.0, 1.0),  # Z axis
                 )
-                for i, env_id in enumerate(env_ids_t):
-                    frame_idx = int(aiming_frame_idx[i].item())
-                    root_pos_w = self.data.base_pos_w[env_id, frame_idx]
-                    root_quat_w = self.data.base_quat_w[env_id, frame_idx]
-                    root_rot = math_utils.matrix_from_quat(root_quat_w.unsqueeze(0))[0]
+                root_pos_w = self.data.base_pos_w[env_ids_t, aiming_frame_idx]
+                root_quat_w = self.data.base_quat_w[env_ids_t, aiming_frame_idx]
+                root_rot = math_utils.matrix_from_quat(root_quat_w)
+                root_pos_w_np = root_pos_w.cpu().numpy()
+                root_rot_np = root_rot.cpu().numpy()
+                for i in range(len(env_ids_t)):
                     visualizer.add_frame(
-                        position=root_pos_w,
-                        rotation_matrix=root_rot,
+                        position=root_pos_w_np[i],
+                        rotation_matrix=root_rot_np[i],
                         scale=root_scale,
                         axis_radius=root_axis_radius,
                         alpha=float(root_color[3]),
@@ -1154,10 +1155,11 @@ class MotionReferenceManager(Sensor):
                 link_marker_cfg = marker_cfgs["link_ref"]
                 link_radius = float(link_marker_cfg.radius)
                 link_color = tuple(link_marker_cfg.color)
-                for i, env_id in enumerate(env_ids_t):
-                    frame_idx = int(aiming_frame_idx[i].item())
-                    link_pos_w = self.data.link_pos_w[env_id, frame_idx]
-                    for point in link_pos_w:
+                link_pos_w = self.data.link_pos_w[env_ids_t, aiming_frame_idx]
+                link_pos_w_np = link_pos_w.cpu().numpy()
+                for i in range(len(env_ids_t)):
+                    link_pos_w_i = link_pos_w_np[i]
+                    for point in link_pos_w_i:
                         visualizer.add_sphere(center=point, radius=link_radius, color=link_color)
 
             if "relative_links" in self.cfg.visualizing_marker_types:
@@ -1178,11 +1180,13 @@ class MotionReferenceManager(Sensor):
                 relative_link_rot = math_utils.matrix_from_quat(relative_link_quat_w.reshape(-1, 4)).reshape(
                     relative_link_quat_w.shape[0], relative_link_quat_w.shape[1], 3, 3
                 )
+                relative_link_pos_w_np = relative_link_pos_w.cpu().numpy()
+                relative_link_rot_np = relative_link_rot.cpu().numpy()
                 for i in range(relative_link_pos_w.shape[0]):
                     for link_i in range(relative_link_pos_w.shape[1]):
                         visualizer.add_frame(
-                            position=relative_link_pos_w[i, link_i],
-                            rotation_matrix=relative_link_rot[i, link_i],
+                            position=relative_link_pos_w_np[i, link_i],
+                            rotation_matrix=relative_link_rot_np[i, link_i],
                             scale=rel_scale,
                             axis_radius=rel_axis_radius,
                             alpha=float(rel_color[3]),

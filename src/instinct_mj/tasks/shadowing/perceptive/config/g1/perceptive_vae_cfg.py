@@ -39,8 +39,8 @@ G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 # NOTE: Change this to your local perceptive VAE dataset folder.
 # The folder should contain the motion files and a `metadata.yaml`.
 MOTION_FOLDER = (
-    "~/your/path/to/20251116_50cm_kneeClimbStep1"
-    # "~/your/path/to/20251116_50cm_kneeClimbStep1/20251106_diveroll4_roadRamp_noWall"
+    "~/Xyk/Datasets/20260317_50cm_kneeClimbStep1_projectInstinct"
+    # "~/Xyk/Datasets/20260317_50cm_kneeClimbStep1_projectInstinct/20251106_diveroll4_roadRamp_noWall"
 )
 
 # NOTE: Temporary local play override for perceptive VAE.

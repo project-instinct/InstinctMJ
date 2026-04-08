@@ -190,7 +190,7 @@ class AlgorithmCfg(InstinctRlPpoAlgorithmCfg):
     )
     teacher_logdir: object = field(
         default_factory=lambda: os.path.expanduser(
-            "~/your/path/to/instinct_mj_logs/instinct_rl/g1_perceptive_shadowing/your_teacher_run"
+            "~/Xyk/Project-Instinct/InstinctMJ/logs/instinct_rl/g1_perceptive_shadowing/2026-03-07_15-29-45"
         )
     )
 

@@ -111,25 +111,25 @@ def _edit_shadowing_scene_spec(spec: mujoco.MjSpec) -> None:
 
 
 # MOTION_NAME = "AccadRun" # success
-# _hacked_selected_file_ = "ACCAD/Male2Running_c3d/C5 - walk to run_retargetted.npz"
+# _hacked_selected_file_ = "ACCAD/Male2Running_c3d/C5 - walk to run_retargeted.npz"
 
 # MOTION_NAME = "AccadMartialBounce"
-# _hacked_selected_file_ = "ACCAD/MartialArtsWalksTurns_c3d/E8 - bounce_retargetted.npz"
+# _hacked_selected_file_ = "ACCAD/MartialArtsWalksTurns_c3d/E8 - bounce_retargeted.npz"
 # MOTION_NAME = "KitStomp"
-# _hacked_selected_file_ = "KIT/3/stomp_left03_retargetted.npz"
+# _hacked_selected_file_ = "KIT/3/stomp_left03_retargeted.npz"
 
 # MOTION_NAME = "AccadMartialSpin"
-# _hacked_selected_file_ = "ACCAD/Male2MartialArtsKicks_c3d/G20_-__reverse_spin_cresent_right_retargetted.npz"
+# _hacked_selected_file_ = "ACCAD/Male2MartialArtsKicks_c3d/G20_-__reverse_spin_cresent_right_retargeted.npz"
 # MOTION_NAME = "KitStretch"  # requires balancing
-# _hacked_selected_file_ = "KIT/3/streching_leg01_retargetted.npz"
+# _hacked_selected_file_ = "KIT/3/streching_leg01_retargeted.npz"
 
 MOTION_NAME = "LafanKungfu1"
-_hacked_selected_files_ = ["fightAndSports1_subject1_retargetted.npz"]
+_hacked_selected_files_ = ["fightAndSports1_subject1_retargeted.npz"]
 # MOTION_NAME = "LafanSprint1"
-# _hacked_selected_files_ = ["sprint1_subject2_retargetted.npz"]
+# _hacked_selected_files_ = ["sprint1_subject2_retargeted.npz"]
 
 # MOTION_NAME = "test"
-# _hacked_selected_files_ = ["CMU/90/90_26_retargetted.npz"]
+# _hacked_selected_files_ = ["CMU/90/90_26_retargeted.npz"]
 
 # NOTE: Change `MOTION_NAME`, `_hacked_selected_files_`, and the active dataset path
 # below to your local motion setup before training / play.
@@ -137,101 +137,37 @@ MOTION_NAME = "LafanFight5Files"
 # NOTE: Change this preset dataset root if you use this motion selection block.
 _path_ = os.path.expanduser("~/your/path/to/lafan1_gmr_unitree_g1_instinct")
 _hacked_selected_files_ = [
-    "fight1_subject2_retargetted.npz",
-    "fight1_subject3_retargetted.npz",
-    "fight1_subject5_retargetted.npz",
-    "fightAndSports1_subject1_retargetted.npz",
-    "fightAndSports1_subject4_retargetted.npz",
+    "fight1_subject2_retargeted.npz",
+    "fight1_subject3_retargeted.npz",
+    "fight1_subject5_retargeted.npz",
+    "fightAndSports1_subject1_retargeted.npz",
+    "fightAndSports1_subject4_retargeted.npz",
 ]
 
 
 MOTION_NAME = "LafanFiltered"
 # NOTE: Change this preset dataset root if you use this motion selection block.
-_path_ = os.path.expanduser("~/your/path/to/lafan1_gmr_unitree_g1_instinct")
+_path_ = os.path.expanduser("~/Xyk/Datasets/lafan1_gmr_unitree_g1_instinct")
 _hacked_selected_files_ = [
-    "aiming1_subject1_retargetted.npz",  # O
-    "aiming1_subject4_retargetted.npz",  # O
-    "aiming2_subject2_retargetted.npz",  # O
-    "aiming2_subject3_retargetted.npz",  # O
-    "aiming2_subject5_retargetted.npz",  # O
-    "dance1_subject1_retargetted.npz",  # O
-    "dance1_subject2_retargetted.npz",  # O
-    "dance1_subject3_retargetted.npz",  # O
-    "dance2_subject1_retargetted.npz",  # O
-    "dance2_subject2_retargetted.npz",  # O
-    "dance2_subject3_retargetted.npz",  # O
-    "dance2_subject4_retargetted.npz",  # O
-    "dance2_subject5_retargetted.npz",  # O
-    "fallAndGetUp1_subject1_retargetted.npz",  # O
-    "fallAndGetUp1_subject4_retargetted.npz",  # O
-    "fallAndGetUp1_subject5_retargetted.npz",  # O
-    "fallAndGetUp2_subject2_retargetted.npz",  # O
-    "fallAndGetUp2_subject3_retargetted.npz",  # O
-    "fallAndGetUp3_subject1_retargetted.npz",  # O
-    "fight1_subject2_retargetted.npz",  # O
-    "fight1_subject3_retargetted.npz",  # O
-    "fight1_subject5_retargetted.npz",  # O
-    "fightAndSports1_subject1_retargetted.npz",  # O
-    "fightAndSports1_subject4_retargetted.npz",  # O
-    "ground1_subject1_retargetted.npz",  # O
-    "ground1_subject4_retargetted.npz",  # O
-    "ground1_subject5_retargetted.npz",  # O
-    "ground2_subject2_retargetted.npz",  # O
-    "ground2_subject3_retargetted.npz",  # O
-    "jumps1_subject1_retargetted.npz",  # O
-    "jumps1_subject2_retargetted.npz",  # O
-    "jumps1_subject5_retargetted.npz",  # O
-    "multipleActions1_subject1_retargetted.npz",  # O
-    "multipleActions1_subject2_retargetted.npz",  # O
-    # "multipleActions1_subject3_retargetted.npz", # X
-    # "multipleActions1_subject4_retargetted.npz", # - (some sitting pose, but seems torlerable)
-    # "obstacles1_subject1_retargetted.npz", # X
-    # "obstacles1_subject2_retargetted.npz", # X
-    # "obstacles1_subject5_retargetted.npz", # X
-    # "obstacles2_subject1_retargetted.npz", # X
-    # "obstacles2_subject2_retargetted.npz", # X
-    # "obstacles2_subject5_retargetted.npz", # disable all obstacles
-    # "obstacles3_subject3_retargetted.npz", # disable all obstacles
-    # "obstacles3_subject4_retargetted.npz", # disable all obstacles
-    # "obstacles4_subject2_retargetted.npz", # disable all obstacles
-    # "obstacles4_subject3_retargetted.npz", # X  # disable all obstacles
-    # "obstacles4_subject4_retargetted.npz", # disable all obstacles
-    # "obstacles5_subject2_retargetted.npz", # disable all obstacles
-    # "obstacles5_subject3_retargetted.npz", # disable all obstacles
-    # "obstacles5_subject4_retargetted.npz", # disable all obstacles
-    # "obstacles6_subject1_retargetted.npz", # disable all obstacles
-    # "obstacles6_subject4_retargetted.npz", # disable all obstacles
-    # "obstacles6_subject5_retargetted.npz", # disable all obstacles
-    "push1_subject2_retargetted.npz",  # O
-    "pushAndFall1_subject1_retargetted.npz",  # O
-    "pushAndFall1_subject4_retargetted.npz",  # O
-    "pushAndStumble1_subject2_retargetted.npz",  # O
-    "pushAndStumble1_subject3_retargetted.npz",  # O
-    "pushAndStumble1_subject5_retargetted.npz",  # O
-    "run1_subject2_retargetted.npz",
-    "run1_subject5_retargetted.npz",
-    "run2_subject1_retargetted.npz",
-    "run2_subject4_retargetted.npz",
-    "sprint1_subject2_retargetted.npz",
-    "sprint1_subject4_retargetted.npz",
-    "walk1_subject1_retargetted.npz",
-    "walk1_subject2_retargetted.npz",
-    "walk1_subject5_retargetted.npz",
-    "walk2_subject1_retargetted.npz",
-    "walk2_subject3_retargetted.npz",
-    "walk2_subject4_retargetted.npz",
-    "walk3_subject1_retargetted.npz",
-    "walk3_subject2_retargetted.npz",
-    "walk3_subject3_retargetted.npz",
-    "walk3_subject4_retargetted.npz",
-    "walk3_subject5_retargetted.npz",
-    "walk4_subject1_retargetted.npz",  # O
+    "aiming1_subject1_retargeted.npz",  # O
+    "aiming1_subject4_retargeted.npz",  # O
+    "aiming2_subject2_retargeted.npz",  # O
+    "aiming2_subject3_retargeted.npz",  # O
+    "walk1_subject1_retargeted.npz",
+    "walk1_subject2_retargeted.npz",
+    "walk1_subject5_retargeted.npz",
+    "walk2_subject1_retargeted.npz",
+    "walk2_subject3_retargeted.npz",
+    "walk2_subject4_retargeted.npz",
+    "walk3_subject1_retargeted.npz",
+    "walk3_subject2_retargeted.npz",
+    "walk3_subject3_retargeted.npz",
 ]
 
 # MOTION_NAME = "LafanGetup2S3"
 # _path_ = os.path.expanduser("~/your/path/to/lafan1_gmr_unitree_g1_instinct")
 # _hacked_selected_files_ = [
-#     "fallAndGetUp2_subject3_retargetted.npz",
+#     "fallAndGetUp2_subject3_retargeted.npz",
 # ]
 
 with open(f"/tmp/{MOTION_NAME}.yaml", "w") as f:
@@ -332,9 +268,9 @@ motion_reference_cfg = MotionReferenceManagerCfg(
             # path = os.path.expanduser("~/your/path/to/AMASS_SMPLX-NG_GMR_29dof_g1_torsoBase_retargetted_20250901_instinctnpz")
             # path = _path_
             # NOTE: Change this to the active local whole-body shadowing dataset root.
-            path=os.path.expanduser("~/your/path/to/whole_body_motion_dataset"),
+            path=os.path.expanduser("~/Xyk/Datasets/lafan1_gmr_unitree_g1_instinct"),
             retargetting_func=None,
-            filtered_motion_selection_filepath=None,
+            filtered_motion_selection_filepath=f"/tmp/{MOTION_NAME}.yaml",
             motion_start_from_middle_range=[0.0, 0.8],
             motion_start_height_offset=0.0,
             ensure_link_below_zero_ground=False,

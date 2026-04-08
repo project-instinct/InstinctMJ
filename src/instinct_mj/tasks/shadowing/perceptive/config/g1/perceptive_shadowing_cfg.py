@@ -30,7 +30,7 @@ G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 
 # NOTE: Change this if your local perceptive shadowing dataset lives elsewhere.
 # The folder should contain the motion files and a `metadata.yaml`.
-MOTION_FOLDER = "~/your/path/to/20251116_50cm_kneeClimbStep1"
+MOTION_FOLDER = "~/Xyk/Datasets/20251116_50cm_kneeClimbStep1"
 
 # NOTE: Optional play override for perceptive shadowing.
 # Leave this as `None` to reuse `MOTION_FOLDER`, or set it to another local
@@ -451,6 +451,8 @@ class G1PerceptiveShadowingOneMotionEnvCfg(G1PerceptiveShadowingEnvCfg):
         motion_name = list(motion_reference_cfg.motion_buffers.keys())[0]
         motion_buffer = motion_reference_cfg.motion_buffers[motion_name]
         if _maybe_disable_single_motion_binning(motion_buffer):
+            self.curriculum["beyond_adaptive_sampling"] = None
+            self.events["bin_fail_counter_smoothing"] = None
             self.run_name = self.run_name.replace("_concatMotionBins", "_independentMotionBins")
         selected_motion_stem = os.path.splitext(os.path.basename(selected_motion))[0]
         self.run_name += f"_oneMotion_{selected_motion_stem}"

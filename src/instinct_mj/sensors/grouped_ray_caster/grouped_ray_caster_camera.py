@@ -455,8 +455,9 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         if viz_points.shape[0] > max_points:
             stride = max(1, viz_points.shape[0] // max_points)
             viz_points = viz_points[::stride]
+        viz_points_np = viz_points.cpu().numpy()
 
-        for point in viz_points:
+        for point in viz_points_np:
             visualizer.add_sphere(
                 center=point,
                 radius=point_radius,
@@ -466,10 +467,12 @@ class GroupedRayCasterCamera(GroupedRayCaster):
         camera_pos = self._camera_data.pos_w[env_ids]
         camera_quat = self._camera_data.quat_w_world[env_ids]
         camera_rot = math_utils.matrix_from_quat(camera_quat)
+        camera_pos_np = camera_pos.cpu().numpy()
+        camera_rot_np = camera_rot.cpu().numpy()
         for idx in range(len(env_ids)):
             visualizer.add_frame(
-                position=camera_pos[idx],
-                rotation_matrix=camera_rot[idx],
+                position=camera_pos_np[idx],
+                rotation_matrix=camera_rot_np[idx],
                 scale=frame_scale,
                 axis_radius=frame_axis_radius,
                 alpha=0.9,
