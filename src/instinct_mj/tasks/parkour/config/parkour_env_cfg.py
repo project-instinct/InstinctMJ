@@ -94,7 +94,7 @@ ROUGH_TERRAINS_CFG = FiledTerrainGeneratorCfg(
         "pyramid_stairs": PerlinPyramidStairsTerrainCfg(
             proportion=0.15,
             step_height_range=(0.05, 0.23),
-            step_width=0.3,
+            step_width=0.35,
             platform_width=2.5,
             border_width=1.0,
             wall_prob=[0.3, 0.3, 0.3, 0.3],
@@ -121,7 +121,7 @@ ROUGH_TERRAINS_CFG = FiledTerrainGeneratorCfg(
         "pyramid_stairs_high": PerlinPyramidStairsTerrainCfg(
             proportion=0.10,
             step_height_range=(0.05, 0.45),
-            step_width=1.5,
+            step_width=1.54,
             platform_width=4.0,
             border_width=1.0,
             wall_prob=[0.3, 0.3, 0.3, 0.3],
@@ -148,7 +148,7 @@ ROUGH_TERRAINS_CFG = FiledTerrainGeneratorCfg(
         "pyramid_stairs_inv": PerlinInvertedPyramidStairsTerrainCfg(
             proportion=0.15,
             step_height_range=(0.05, 0.23),
-            step_width=0.3,
+            step_width=0.35,
             platform_width=2.5,
             border_width=1.0,
             wall_prob=[0.3, 0.3, 0.3, 0.3],
@@ -175,7 +175,7 @@ ROUGH_TERRAINS_CFG = FiledTerrainGeneratorCfg(
         "pyramid_stairs_inv_high": PerlinInvertedPyramidStairsTerrainCfg(
             proportion=0.10,
             step_height_range=(0.05, 0.45),
-            step_width=1.5,
+            step_width=1.54,
             platform_width=4.0,
             border_width=1.0,
             wall_prob=[0.3, 0.3, 0.3, 0.3],
