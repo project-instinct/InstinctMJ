@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from mjlab.entity import Entity as Articulation
     from mjlab.entity import Entity as RigidObject
 
-    from instinct_mj.motion_reference import MotionReferenceManager
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
 """
 Reward functions

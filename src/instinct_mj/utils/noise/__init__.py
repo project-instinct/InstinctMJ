@@ -16,6 +16,7 @@ from instinct_mj.utils.noise.noise_cfg import NoiseModelCfg as NoiseModelCfg
 from instinct_mj.utils.noise.noise_cfg import NoiseModelWithAdditiveBiasCfg as NoiseModelWithAdditiveBiasCfg
 from instinct_mj.utils.noise.noise_cfg import RandomGaussianNoiseCfg as RandomGaussianNoiseCfg
 from instinct_mj.utils.noise.noise_cfg import RangeBasedGaussianNoiseCfg as RangeBasedGaussianNoiseCfg
+from instinct_mj.utils.noise.noise_cfg import SensorDeadNoiseCfg as SensorDeadNoiseCfg
 from instinct_mj.utils.noise.noise_cfg import StereoTooCloseNoiseCfg as StereoTooCloseNoiseCfg
 from instinct_mj.utils.noise.noise_cfg import UniformNoiseCfg as UniformNoiseCfg
 from instinct_mj.utils.noise.noise_model import NoiseModel as NoiseModel

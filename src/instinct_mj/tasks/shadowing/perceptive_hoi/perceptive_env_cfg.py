@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 import math
 from dataclasses import MISSING, dataclass, field
 
 import mjlab.envs.mdp as mdp
-import mjlab.sim as sim_utils
 import mujoco
 from mjlab.managers import CurriculumTermCfg, EventTermCfg
 from mjlab.managers import ObservationGroupCfg as ObsGroupCfg
@@ -20,7 +21,6 @@ from mjlab.sensor import (
     RayCastSensorCfg,
     SensorCfg,
 )
-from mjlab.terrains import FlatPatchSamplingCfg
 from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 
@@ -36,30 +36,26 @@ from instinct_mj.monitors import (
     ShadowingRotationMonitorTerm,
 )
 from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
-from instinct_mj.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
-from instinct_mj.tasks.shadowing import mdp as shadowing_mdp
-from instinct_mj.terrains.terrain_generator_cfg import FiledTerrainGeneratorCfg
 from instinct_mj.terrains.terrain_importer_cfg import TerrainImporterCfg
-from instinct_mj.terrains.trimesh import MotionMatchedTerrainCfg
 from instinct_mj.utils.noise import (
     CropAndResizeCfg,
-    DepthArtifactNoiseCfg,
-    DepthContourNoiseCfg,
     DepthNormalizationCfg,
-    DepthSkyArtifactNoiseCfg,
-    GaussianBlurNoiseCfg,
-    RangeBasedGaussianNoiseCfg,
-    StereoTooCloseNoiseCfg,
 )
 
 # PROPRIO_HISTORY_LENGTH = 0
+PROPRIO_HISTORY_LENGTH = 8
 
 
-def _edit_perceptive_scene_spec(spec: mujoco.MjSpec) -> None:
-    """Apply skybox and terrain material to the scene spec."""
-    ground_texture_name = "perceptive_groundplane"
-    ground_material_name = "perceptive_groundplane"
+def _edit_hoi_scene_spec(spec: mujoco.MjSpec) -> None:
+    """Apply skybox and terrain material to the HOI scene spec.
+
+    HOI uses a flat plane (no motion-matched terrain), but the native viewer
+    cosmetics and reference-robot contact disabling are identical to the
+    perceptive task; kept inline here so this task is self-contained.
+    """
+    ground_texture_name = "hoi_groundplane"
+    ground_material_name = "hoi_groundplane"
 
     # Bright sky theme so native viewer doesn't look like a black void.
     sky_rgb_top = (0.98, 0.99, 1.0)
@@ -85,7 +81,7 @@ def _edit_perceptive_scene_spec(spec: mujoco.MjSpec) -> None:
         existing_skybox.height = 3072
     else:
         TextureCfg(
-            name="perceptive_skybox",
+            name="hoi_skybox",
             type="skybox",
             builtin="gradient",
             rgb1=sky_rgb_top,
@@ -164,144 +160,20 @@ def _edit_perceptive_scene_spec(spec: mujoco.MjSpec) -> None:
                 geom.group = 1
 
 
-@dataclass(kw_only=True)
-class PerceptiveShadowingSceneCfg(SceneCfg):
-    """Configuration for the BeyondMimic scene with necessary scene entities as motion reference."""
+def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCfg]:
+    """Build the HOI scene sensors that are independent of the motion reference.
 
-    env_spacing: float = 4.0
-
-    # terrain
-    terrain: object = field(
-        default_factory=lambda: TerrainImporterCfg(
-            terrain_type="hacked_generator",
-            terrain_generator=FiledTerrainGeneratorCfg(
-                size=(9, 12),
-                border_width=0.0,
-                border_height=0.0,
-                num_rows=7,
-                num_cols=7,
-                add_lights=True,
-                sub_terrains={
-                    # MotionMatchedTerrainCfg keeps motion-terrain pairing from metadata.yaml.
-                    # Use CoACD collision to avoid MuJoCo mesh convex-hull filling issues.
-                    "motion_matched": MotionMatchedTerrainCfg(
-                        proportion=1.0,
-                        path="PLACEHOLDER",  # Will be overridden in concrete env cfg __post_init__
-                        metadata_yaml="PLACEHOLDER",  # Will be overridden in concrete env cfg __post_init__
-                        collision_coacd=True,
-                        # Use CoACD hulls directly as rendered terrain mesh (instead of source STL mesh).
-                        collision_coacd_visualize_collision_hulls=True,
-                        collision_coacd_threshold=0.04,
-                        # Keep hull geometry detailed to avoid blocky/disconnected visual artifacts.
-                        collision_coacd_decimate=False,
-                        collision_coacd_max_ch_vertex=256,
-                        collision_coacd_resolution=3000,
-                        # Keep stable runtime/caching behavior.
-                        collision_coacd_log_level="off",
-                        collision_coacd_use_disk_cache=True,
-                        collision_coacd_prewarm_all=True,
-                        collision_coacd_prewarm_workers=0,
-                        collision_coacd_geom_margin=0.0,
-                        collision_coacd_z_offset=0.0,
-                        collision_coacd_auto_align_top_surface=True,
-                    ),
-                },
-            ),
-        )
-    )
-
-    # sensors
-    sensors: tuple[SensorCfg, ...] = field(
-        default_factory=lambda: (
-            ContactSensorCfg(
-                name="contact_forces",
-                primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
-                secondary=ContactMatch(mode="body", pattern="terrain"),
-                fields=("found", "force"),
-                reduce="maxforce",
-                history_length=3,
-                track_air_time=True,
-            ),
-            RayCastSensorCfg(
-                name="height_scanner",
-                frame=ObjRef(type="body", name="torso_link", entity="robot"),
-                pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
-                ray_alignment="yaw",
-                max_distance=30.0,
-                debug_vis=False,
-            ),
-            NoisyGroupedRayCasterCameraCfg(
-                name="camera",
-                frame=ObjRef(type="body", name="torso_link", entity="robot"),
-                pattern=PinholeCameraPatternCfg(
-                    height=int(270 / 10),
-                    width=int(480 / 10),
-                    fovy=58.0,
-                ),
-                focal_length=1.0,
-                horizontal_aperture=2 * math.tan(math.radians(87) / 2),
-                vertical_aperture=2 * math.tan(math.radians(58) / 2),
-                ray_alignment="base",
-                include_geom_groups=(0, 2),
-                exclude_parent_body=False,
-                offset=NoisyGroupedRayCasterCameraCfg.OffsetCfg(
-                    pos=(
-                        0.04764571478 + 0.0039635 - 0.0042 * math.cos(math.radians(48)),
-                        0.015,
-                        0.46268178553 - 0.044 + 0.0042 * math.sin(math.radians(48)) + 0.016,
-                    ),
-                    rot=(
-                        math.cos(math.radians(0.5) / 2) * math.cos(math.radians(48) / 2),
-                        math.sin(math.radians(0.5) / 2),
-                        math.sin(math.radians(48) / 2),
-                        0.0,
-                    ),
-                    convention="world",
-                ),
-                data_types=["distance_to_image_plane"],
-                mesh_filter_max_hops=24,
-                noise_pipeline={
-                    "normalize": DepthNormalizationCfg(
-                        depth_range=(0.0, 2.0),
-                        normalize=True,
-                    ),
-                    "crop_and_resize": CropAndResizeCfg(
-                        crop_region=(2, 2, 2, 2),
-                        resize_shape=(18, 32),
-                    ),
-                },
-                update_period=1 / 60,
-                debug_vis=False,
-                depth_clipping_behavior="max",
-                min_distance=0.05,
-                max_distance=1e6,
-            ),
-        )
-    )
-
-    def __post_init__(self):
-        self.spec_fn = _edit_perceptive_scene_spec
-        if "robot" not in self.entities:
-            raise ValueError("PerceptiveShadowingSceneCfg requires entity 'robot'.")
-        if not any(sensor_cfg.name == "motion_reference" for sensor_cfg in self.sensors):
-            raise ValueError("PerceptiveShadowingSceneCfg requires sensor 'motion_reference'.")
-        motion_reference_cfg = next(sensor_cfg for sensor_cfg in self.sensors if sensor_cfg.name == "motion_reference")
-        if (not motion_reference_cfg.debug_vis) and ("robot_reference" in self.entities):
-            del self.entities["robot_reference"]
-
-
-def make_perceptive_scene_sensors(
-    *,
-    motion_reference: MotionReferenceManagerCfg,
-    include_height_scanner: bool = True,
-) -> tuple[SensorCfg, ...]:
-    """Build perceptive scene sensors without bridge fields."""
-    # lights are applied in _edit_perceptive_scene_spec.
+    Contact semantics differ from the perceptive task: there is NO secondary
+    match, so "any contact with a robot body counts" (terrain + objects + self).
+    This matches IsaacLab's ContactSensor(prim_path="Robot/.*") net-force
+    semantics, which the shared undesired_contacts / illegal_reset_contact terms
+    rely on.
+    """
     sensor_list: list[SensorCfg] = [
         ContactSensorCfg(
             name="contact_forces",
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
-            secondary=ContactMatch(mode="body", pattern="terrain"),
+            # No secondary on purpose (see docstring).
             fields=("found", "force"),
             reduce="maxforce",
             history_length=3,
@@ -351,24 +223,6 @@ def make_perceptive_scene_sensors(
             data_types=["distance_to_image_plane"],
             mesh_filter_max_hops=24,
             noise_pipeline={
-                # "depth_contour_noise": DepthContourNoiseCfg(
-                #     contour_threshold=1.8,  # in [m]
-                #     maxpool_kernel_size=1,
-                # ),
-                # "depth_artifact_noise": DepthArtifactNoiseCfg(),
-                # "reflection_artifact_noise": DepthArtifactNoiseCfg(noise_value=30.0),
-                # "stereo_noise": RangeBasedGaussianNoiseCfg(
-                #     max_value=1.2,
-                #     min_value=0.12,
-                #     noise_std=0.02,
-                # ),
-                # "sky_artifact_noise": DepthSkyArtifactNoiseCfg(),
-                # "gaussian_blur_noise": GaussianBlurNoiseCfg(
-                #     kernel_size=3,
-                #     sigma=0.5,
-                # ),
-                # "stereo_too_close_noise": StereoTooCloseNoiseCfg(),
-                # These last two noise model will affect the processing on the onboard device.
                 "normalize": DepthNormalizationCfg(
                     depth_range=(0.0, 2.0),
                     normalize=True,
@@ -386,12 +240,50 @@ def make_perceptive_scene_sensors(
             max_distance=1e6,
         )
     )
+    return sensor_list
+
+
+@dataclass(kw_only=True)
+class PerceptiveHoiShadowingSceneCfg(SceneCfg):
+    """Configuration for the BeyondMimic HOI scene with motion reference."""
+
+    env_spacing: float = 4.0
+
+    # terrain (flat plane for HOI; no terrain-matching)
+    terrain: object = field(
+        default_factory=lambda: TerrainImporterCfg(
+            terrain_type="plane",
+            terrain_generator=None,
+        )
+    )
+
+    # sensors (motion_reference must be appended by the concrete robot cfg)
+    sensors: tuple[SensorCfg, ...] = field(default_factory=lambda: tuple(_make_hoi_base_sensors()))
+
+    def __post_init__(self):
+        self.spec_fn = _edit_hoi_scene_spec
+        if "robot" not in self.entities:
+            raise ValueError("PerceptiveHoiShadowingSceneCfg requires entity 'robot'.")
+        if not any(sensor_cfg.name == "motion_reference" for sensor_cfg in self.sensors):
+            raise ValueError("PerceptiveHoiShadowingSceneCfg requires sensor 'motion_reference'.")
+        motion_reference_cfg = next(sensor_cfg for sensor_cfg in self.sensors if sensor_cfg.name == "motion_reference")
+        if (not motion_reference_cfg.debug_vis) and ("robot_reference" in self.entities):
+            del self.entities["robot_reference"]
+
+
+def make_hoi_scene_sensors(
+    *,
+    motion_reference: MotionReferenceManagerCfg,
+    include_height_scanner: bool = True,
+) -> tuple[SensorCfg, ...]:
+    """Build HOI scene sensors with upstream contact semantics."""
+    sensor_list = _make_hoi_base_sensors(include_height_scanner=include_height_scanner)
     sensor_list.append(motion_reference)
     return tuple(sensor_list)
 
 
-def make_perceptive_commands() -> dict[str, instinct_mdp.ShadowingCommandBaseCfg]:
-    """Perceptive shadowing command configuration."""
+def make_hoi_commands() -> dict[str, instinct_mdp.ShadowingCommandBaseCfg]:
+    """HOI shadowing command configuration."""
     return {
         "position_ref_command": instinct_mdp.PositionRefCommandCfg(
             realtime_mode=True,
@@ -424,7 +316,7 @@ def make_perceptive_commands() -> dict[str, instinct_mdp.ShadowingCommandBaseCfg
     }
 
 
-def make_actions() -> dict[str, mdp.JointPositionActionCfg]:
+def make_hoi_actions() -> dict[str, mdp.JointPositionActionCfg]:
     """Action specifications for the MDP."""
     return {
         "joint_pos": mdp.JointPositionActionCfg(
@@ -435,8 +327,8 @@ def make_actions() -> dict[str, mdp.JointPositionActionCfg]:
     }
 
 
-def make_observations() -> dict[str, ObsGroupCfg]:
-    """Observation specifications for the perceptive shadowing MDP."""
+def make_hoi_observations() -> dict[str, ObsGroupCfg]:
+    """Observation specifications for the perceptive HOI shadowing MDP."""
 
     # Policy observations
     policy_terms = {
@@ -467,13 +359,13 @@ def make_observations() -> dict[str, ObsGroupCfg]:
         "projected_gravity": ObsTermCfg(
             func=mdp.projected_gravity,
             noise=UniformNoiseCfg(n_min=-0.05, n_max=0.05),
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
         # base_lin_vel = ObsTermCfg(func=mdp.base_lin_vel)
         "base_ang_vel": ObsTermCfg(
             func=mdp.base_ang_vel,
             noise=UniformNoiseCfg(n_min=-0.2, n_max=0.2),
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "joint_pos": ObsTermCfg(
             func=mdp.joint_pos_rel,
@@ -481,7 +373,7 @@ def make_observations() -> dict[str, ObsGroupCfg]:
                 "asset_cfg": SceneEntityCfg("robot"),
             },
             noise=UniformNoiseCfg(n_min=-0.01, n_max=0.01),
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "joint_vel": ObsTermCfg(
             func=mdp.joint_vel_rel,
@@ -489,11 +381,11 @@ def make_observations() -> dict[str, ObsGroupCfg]:
                 "asset_cfg": SceneEntityCfg("robot"),
             },
             noise=UniformNoiseCfg(n_min=-0.5, n_max=0.5),
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "last_action": ObsTermCfg(
             func=mdp.last_action,
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
     }
 
@@ -519,29 +411,29 @@ def make_observations() -> dict[str, ObsGroupCfg]:
         ),
         "base_lin_vel": ObsTermCfg(
             func=mdp.base_lin_vel,
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "base_ang_vel": ObsTermCfg(
             func=mdp.base_ang_vel,
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "joint_pos": ObsTermCfg(
             func=mdp.joint_pos_rel,
             params={
                 "asset_cfg": SceneEntityCfg("robot"),
             },
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "joint_vel": ObsTermCfg(
             func=mdp.joint_vel_rel,
             params={
                 "asset_cfg": SceneEntityCfg("robot"),
             },
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
         "last_action": ObsTermCfg(
             func=mdp.last_action,
-            history_length=8,
+            history_length=PROPRIO_HISTORY_LENGTH,
         ),
     }
 
@@ -559,8 +451,8 @@ def make_observations() -> dict[str, ObsGroupCfg]:
     }
 
 
-def make_rewards() -> dict[str, RewTermCfg]:
-    """Reward specifications for the perceptive shadowing MDP."""
+def make_hoi_rewards() -> dict[str, RewTermCfg]:
+    """Reward specifications for the perceptive HOI shadowing MDP."""
     return {
         "base_position_imitation_gauss": RewTermCfg(
             func=instinct_mdp.base_position_imitation_gauss,
@@ -649,8 +541,13 @@ def make_rewards() -> dict[str, RewTermCfg]:
     }
 
 
-def make_events() -> dict[str, EventTermCfg]:
-    """Event specifications for the perceptive shadowing MDP."""
+def make_hoi_events() -> dict[str, EventTermCfg]:
+    """Event specifications for the perceptive HOI shadowing MDP.
+
+    Domain-randomization events mirror the perceptive task. HOI replaces
+    'match_motion_ref_with_scene' (motion-matched terrain) with rigid-object
+    reference reset/update events, matching IsaacLab's perceptive_hoi config.
+    """
     return {
         # domain rand
         "physics_material": EventTermCfg(
@@ -735,13 +632,6 @@ def make_events() -> dict[str, EventTermCfg]:
                 "distribution": "uniform",
             },
         ),
-        "match_motion_ref_with_scene": EventTermCfg(
-            func=instinct_mdp.match_motion_ref_with_scene,
-            mode="startup",
-            params={
-                "motion_ref_cfg": SceneEntityCfg("motion_reference"),
-            },
-        ),
         "reset_robot": EventTermCfg(
             func=instinct_mdp.reset_robot_state_by_reference,
             mode="reset",
@@ -763,6 +653,22 @@ def make_events() -> dict[str, EventTermCfg]:
                 "randomize_velocity_range": {},
                 # Joint position randomization (+-0.1 rad)
                 "randomize_joint_pos_range": (-0.1, 0.1),
+            },
+        ),
+        "reset_rigid_objects_state_by_reference": EventTermCfg(
+            func=instinct_mdp.reset_rigid_objects_state_by_reference,
+            mode="reset",
+            params={
+                "motion_ref_cfg": SceneEntityCfg("motion_reference"),
+            },
+        ),
+        "update_rigid_objects_state_by_reference": EventTermCfg(
+            func=instinct_mdp.update_rigid_objects_state_by_reference,
+            mode="interval",
+            interval_range_s=(0.02, 0.02),  # every env step
+            params={
+                "motion_ref_cfg": SceneEntityCfg("motion_reference"),
+                "invalid_object_pos": (0.0, 0.0, -1.0),  # set to (x, y, z) to teleport invalid objects; None skips them
             },
         ),
         "bin_fail_counter_smoothing": EventTermCfg(
@@ -792,8 +698,8 @@ def make_events() -> dict[str, EventTermCfg]:
     }
 
 
-def make_curriculum() -> dict[str, CurriculumTermCfg]:
-    """Curriculum specifications for the perceptive shadowing MDP."""
+def make_hoi_curriculum() -> dict[str, CurriculumTermCfg]:
+    """Curriculum specifications for the perceptive HOI shadowing MDP."""
     return {
         "beyond_adaptive_sampling": CurriculumTermCfg(  # type: ignore
             func=instinct_mdp.BeyondConcatMotionAdaptiveWeighting,
@@ -801,8 +707,8 @@ def make_curriculum() -> dict[str, CurriculumTermCfg]:
     }
 
 
-def make_terminations() -> dict[str, DoneTermCfg]:
-    """Termination specifications for the perceptive shadowing MDP."""
+def make_hoi_terminations() -> dict[str, DoneTermCfg]:
+    """Termination specifications for the perceptive HOI shadowing MDP."""
     return {
         "time_out": DoneTermCfg(func=mdp.time_out, time_out=True),
         "illegal_reset_contact": DoneTermCfg(
@@ -882,8 +788,8 @@ def make_terminations() -> dict[str, DoneTermCfg]:
     }
 
 
-def make_monitors() -> dict[str, MonitorTermCfg]:
-    """Monitor specifications for the perceptive shadowing MDP."""
+def make_hoi_monitors() -> dict[str, MonitorTermCfg]:
+    """Monitor specifications for the perceptive HOI shadowing MDP."""
     return {
         "dataset": MonitorTermCfg(
             func=MotionReferenceMonitorTerm,
@@ -948,17 +854,17 @@ def make_monitors() -> dict[str, MonitorTermCfg]:
 
 
 @dataclass(kw_only=True)
-class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
-    scene: PerceptiveShadowingSceneCfg = field(default_factory=lambda: PerceptiveShadowingSceneCfg())
+class PerceptiveHoiShadowingEnvCfg(InstinctLabRLEnvCfg):
+    scene: PerceptiveHoiShadowingSceneCfg = field(default_factory=lambda: PerceptiveHoiShadowingSceneCfg())
     decimation: int = 4
-    commands: dict = field(default_factory=make_perceptive_commands)
-    actions: dict = field(default_factory=make_actions)
-    observations: dict = field(default_factory=make_observations)
-    rewards: dict = field(default_factory=make_rewards)
-    events: dict = field(default_factory=make_events)
-    curriculum: dict = field(default_factory=make_curriculum)
-    terminations: dict = field(default_factory=make_terminations)
-    monitors: dict = field(default_factory=make_monitors)
+    commands: dict = field(default_factory=make_hoi_commands)
+    actions: dict = field(default_factory=make_hoi_actions)
+    observations: dict = field(default_factory=make_hoi_observations)
+    rewards: dict = field(default_factory=make_hoi_rewards)
+    events: dict = field(default_factory=make_hoi_events)
+    curriculum: dict = field(default_factory=make_hoi_curriculum)
+    terminations: dict = field(default_factory=make_hoi_terminations)
+    monitors: dict = field(default_factory=make_hoi_monitors)
 
     def __post_init__(self):
         # All managers are already dicts, no conversion needed!
@@ -971,8 +877,10 @@ class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
         # relying on MujocoCfg global defaults (100/50).
         self.sim.mujoco.iterations = 10
         self.sim.mujoco.ls_iterations = 20
-        # MuJoCo 3.5's native CCD can exhaust the old 128-iteration ceiling on
-        # the motion-matched perceptive terrain.
+        # Match the perceptive base: more CCD iterations for accurate mesh-mesh contact
+        # detection (HOI adds several object meshes the robot collides with), which reduces
+        # spurious deep-penetration contact-force spikes at reset.
         self.sim.mujoco.ccd_iterations = 128
         self.sim.nconmax = 128
         self.sim.njmax = 512
+        self.sim.contact_sensor_maxmatch = 128

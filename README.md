@@ -41,13 +41,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
 
 - Recommended Python range: `3.10` to `3.13` (`requires-python = ">=3.10,<3.14"`).
 - Stable top-level runtime matrix currently locked by `pyproject.toml` / `uv.lock`:
-  - `mjlab==1.3.0`
-  - `mujoco==3.7.0`
-  - `mujoco-warp==3.7.0.1`
+  - `mjlab==1.4.0`
+  - `mujoco==3.8.1`
+  - `mujoco-warp==3.8.1`
+  - `warp-lang==1.13.0`
 - Current non-release exceptions in the resolved environment:
   - `instinct_rl` is still sourced from Git, currently locked to commit `3a2844890387eda6d93a4465cdef9e767aba8546`.
-  - Upstream `mujoco-warp==3.7.0.1` currently pulls `warp-lang==1.13.0.dev20260225` as a transitive dependency.
-- This means `InstinctMJ` no longer pins nightly `mjlab` / `mujoco` artifacts, but the full dependency graph is not yet “all release tags only”.
+- This means `InstinctMJ` no longer pins nightly `mjlab` / `mujoco` / `mujoco-warp` artifacts; the remaining Git source is the Project-Instinct training package.
 
 ### Stable install with `uv` (recommended)
 
@@ -74,7 +74,7 @@ git clone https://github.com/mujocolab/mjlab.git
 git clone https://github.com/project-instinct/instinct_rl.git
 git clone https://github.com/project-instinct/InstinctMJ.git
 cd mjlab
-git checkout v1.3.0
+git checkout v1.4.0
 cd ../InstinctMJ
 uv sync
 uv pip install --python .venv/bin/python --no-deps -e ../mjlab -e ../instinct_rl
@@ -92,7 +92,7 @@ If you skip the final editable reinstall, `uv` will keep using the version-pinne
 If you prefer `pip`, keep the same top-level pins explicitly:
 
 ```bash
-pip install "mujoco>=3.7.0,<3.8" "mjlab==1.3.0"
+pip install "mujoco~=3.8.0" "mujoco-warp>=3.8.0.3,~=3.8.0" "warp-lang>=1.12.0" "mjlab==1.4.0"
 pip install -e "git+https://github.com/project-instinct/instinct_rl.git@3a2844890387eda6d93a4465cdef9e767aba8546#egg=instinct_rl"
 pip install -e .
 ```
@@ -130,6 +130,8 @@ Registered task IDs:
 - `Instinct-Shadowing-WholeBody-Plane-G1-Play-v0`
 - `Instinct-Perceptive-Shadowing-G1-v0`
 - `Instinct-Perceptive-Shadowing-G1-Play-v0`
+- `Instinct-Perceptive-HOI-Shadowing-G1-v0`
+- `Instinct-Perceptive-HOI-Shadowing-G1-Play-v0`
 - `Instinct-Perceptive-Vae-G1-v0`
 - `Instinct-Perceptive-Vae-G1-Play-v0`
 - `Instinct-Parkour-Target-Amp-G1-v0`

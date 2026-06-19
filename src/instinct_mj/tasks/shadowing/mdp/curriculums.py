@@ -4,14 +4,14 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 import torch
-from mjlab.managers.manager_base import ManagerTermBase
+from mjlab.managers import ManagerTermBase
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
     from mjlab.managers import CurriculumTermCfg
-    from mjlab.motion_reference.motion_files.amass_motion import AmassMotion
 
-    from instinct_mj.motion_reference import MotionReferenceManager
+    from instinct_mj.motion_reference.motion_files.amass_motion import AmassMotion
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
 
 def update_motion_reference_weight(

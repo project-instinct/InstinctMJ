@@ -41,8 +41,8 @@ from instinct_mj.monitors import (
     ShadowingPositionMonitorTerm,
     ShadowingRotationMonitorTerm,
 )
-from instinct_mj.motion_reference import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.motion_files.amass_motion_cfg import AmassMotionCfg as AmassMotionCfgBase
+from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
 
 combine_method = "prod"

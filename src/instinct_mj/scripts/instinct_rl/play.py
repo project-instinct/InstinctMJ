@@ -104,6 +104,8 @@ def _disable_headless_debug_visualization(env_cfg) -> None:
         sensors = getattr(scene, "sensors", ())
         for sensor_cfg in sensors:
             if getattr(sensor_cfg, "debug_vis", None) is not None:
+                if getattr(sensor_cfg, "reference_entity_name", None) is not None:
+                    continue
                 sensor_cfg.debug_vis = False
 
     commands = getattr(env_cfg, "commands", None)

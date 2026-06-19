@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
     from mjlab.envs import ManagerBasedRlEnv as ManagerBasedEnv
 
-    from instinct_mj.motion_reference import MotionReferenceManager
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
 
 def reference_progress(
@@ -22,7 +22,7 @@ def reference_progress(
     """
     motion_reference: MotionReferenceManager = env.scene[asset_cfg.name]
     motion_length = motion_reference.complete_motion_lengths
-    timestamp = env.episode_length_buf
+    timestamp = env.episode_length_buf if hasattr(env, "episode_length_buf") else torch.zeros_like(motion_length)
     timestamp *= env.step_dt
     # (num_envs, 1)
     return (timestamp / motion_length).unsqueeze(-1)
@@ -59,7 +59,9 @@ def time_from_reference_update(
 def ref_frame_interval(
     env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("motion_reference")
 ) -> torch.Tensor:
-    """Reference time observation combining frame interval and time to target frame."""
+    """A legacy reference time observation.
+    Combing motion frame interval (s) and the time to target frame
+    """
     motion_reference: MotionReferenceManager = env.scene[asset_cfg.name]
     frame_interval = motion_reference.data.time_to_target_frame[..., :1]
     time_from_reference_update = motion_reference.time_passed_from_update.unsqueeze(-1)
@@ -67,7 +69,8 @@ def ref_frame_interval(
     return torch.cat(
         [
             frame_interval,
-            # This value starts from frame_interval and may become negative.
+            # I know this value start from frame_interval to negative values...
+            # It is not designed well in the isaacgym version.
             time_to_target,
         ],
         dim=-1,
@@ -86,7 +89,7 @@ def motion_reference_mask(
             an all-trues mask.
     """
     motion_reference: MotionReferenceManager = env.scene[asset_cfg.name]
-    return_ = motion_reference.data.__getattribute__(data_name).to(torch.float32)  # (num_envs, num_frames, D)
+    return_ = getattr(motion_reference.data, data_name).to(torch.float32)  # (num_envs, num_frames, D)
     if current_state_mask_at_last:
         return_ = torch.cat(
             [
@@ -131,7 +134,7 @@ def pose_ref_mask(
     return return_
 
 
-def pose_ref_mask_compact(
+def pose_ref_mask_legacy(
     env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("motion_reference")
 ) -> torch.Tensor:
     motion_reference: MotionReferenceManager = env.scene[asset_cfg.name]

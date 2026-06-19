@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from mjlab.entity import Entity
     from mjlab.envs import ManagerBasedRlEnv
 
-    from instinct_mj.motion_reference import MotionReferenceManager
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
 
 def pos_far_from_ref(

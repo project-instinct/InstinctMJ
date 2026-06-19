@@ -12,8 +12,8 @@ if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
     from mjlab.managers import CurriculumTermCfg
 
-    from instinct_mj.motion_reference import MotionReferenceManager
     from instinct_mj.motion_reference.motion_files.amass_motion import AmassMotion
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
 
 class BeyondMimicAdaptiveWeighting(ManagerTermBase):

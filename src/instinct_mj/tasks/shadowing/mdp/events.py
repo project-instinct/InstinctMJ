@@ -10,7 +10,8 @@ if TYPE_CHECKING:
     from mjlab.entity import Entity
     from mjlab.envs import ManagerBasedEnv
 
-    from instinct_mj.motion_reference import MotionReferenceData, MotionReferenceManager
+    from instinct_mj.motion_reference import MotionReferenceData
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
 """
 Sampling masks.

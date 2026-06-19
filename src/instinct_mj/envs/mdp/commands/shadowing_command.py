@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
-    from instinct_mj.motion_reference import MotionReferenceManager
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
     from .commands_cfg import (
         BaseHeightRefCommandCfg,

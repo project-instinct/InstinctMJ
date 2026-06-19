@@ -10,11 +10,11 @@ from pathlib import Path
 import mjlab
 import torch
 import tyro
-from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.torch import configure_torch_backends
 
 import instinct_mj.tasks  # noqa: F401
+from instinct_mj.envs import InstinctRlEnv
 from instinct_mj.tasks.registry import list_tasks, load_env_cfg
 from instinct_mj.utils.motion_validation import validate_tracking_motion_file
 
@@ -175,7 +175,7 @@ def run_probe(task_id: str, cfg: ProbeConfig) -> None:
         env_cfg.scene.num_envs = cfg.num_envs
     _resolve_tracking_motion(task_id, cfg, env_cfg)
 
-    env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=None)
+    env = InstinctRlEnv(cfg=env_cfg, device=device, render_mode=None)
     obs, _ = env.reset()
     action_dim = env.action_manager.total_action_dim
 

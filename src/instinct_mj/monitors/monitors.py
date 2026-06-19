@@ -5,7 +5,7 @@ import os
 from typing import TYPE_CHECKING, Sequence
 
 import torch
-from mjlab.actuator.actuator import TransmissionType
+from mjlab.actuator import BuiltinPdActuator, BuiltinPositionActuator, BuiltinVelocityActuator
 from mjlab.managers import SceneEntityCfg
 from mjlab.utils.lab_api import math as math_utils
 from torch.distributions import Multinomial
@@ -26,12 +26,13 @@ if TYPE_CHECKING:
     from mjlab.entity import Entity
     from mjlab.envs import ManagerBasedRlEnv
 
-    from instinct_mj.motion_reference import MotionReferenceManager
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
     from .monitor_cfg import MonitorTermCfg, TorqueMonitorSensorCfg
 
 
 _NON_EFFORT_CTRL_COMMAND_FIELDS = {"position", "velocity"}
+_NON_EFFORT_CTRL_ACTUATOR_TYPES = (BuiltinPdActuator, BuiltinPositionActuator, BuiltinVelocityActuator)
 
 
 def _joint_torque_monitor_values(asset: Entity) -> tuple[torch.Tensor, torch.Tensor]:
@@ -45,14 +46,16 @@ def _joint_torque_monitor_values(asset: Entity) -> tuple[torch.Tensor, torch.Ten
     local_ctrl = asset.data.data.ctrl[:, asset.indexing.ctrl_ids]
 
     for actuator in asset.actuators:
-        if actuator.transmission_type != TransmissionType.JOINT:
+        if actuator.transmission_type != "joint":
             continue
 
         ctrl_type_actuator = actuator
         while hasattr(ctrl_type_actuator, "base_actuator"):
             ctrl_type_actuator = ctrl_type_actuator.base_actuator
 
-        if getattr(ctrl_type_actuator, "command_field", None) in _NON_EFFORT_CTRL_COMMAND_FIELDS:
+        if isinstance(ctrl_type_actuator, _NON_EFFORT_CTRL_ACTUATOR_TYPES) or (
+            getattr(ctrl_type_actuator, "command_field", None) in _NON_EFFORT_CTRL_COMMAND_FIELDS
+        ):
             # Position/velocity actuator ctrl is not torque; use simulated force.
             computed_values = joint_applied_torque[:, actuator.target_ids]
         else:

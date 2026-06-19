@@ -1,11 +1,21 @@
 # Training/runtime logs
 logs/
 log/
+outputs/
+runs/
+wandb/
+videos/
 *.log
+*.out
 
-# Build metadata
+# Build metadata and generated native artifacts
+build/
+dist/
+obj/
 *.egg-info/
 instinct_mj.egg-info/
+*.o
+*.obj
 
 .github/
 .venv/
@@ -18,3 +28,15 @@ __pycache__/
 *.pyo
 *.pyd
 *.pyc.*
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Scratch analysis / diagnostics / cluster job scripts (not part of source)
+ARCHITECTURE.md
+PERF_ANALYSIS_CPU_GPU_SYNC.md
+diag_fix_test.py
+check_ref*.py
+webplay_hoi.py
+*.slurm

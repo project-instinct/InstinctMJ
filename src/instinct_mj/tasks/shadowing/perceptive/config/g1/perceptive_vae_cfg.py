@@ -28,10 +28,10 @@ from instinct_mj.assets.unitree_g1 import (
     beyondmimic_g1_29dof_delayed_actuator_cfgs,
 )
 from instinct_mj.monitors import ActuatorMonitorTerm, MonitorTermCfg, ShadowingBasePosMonitorTerm
-from instinct_mj.motion_reference import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.motion_files.aistpp_motion_cfg import AistppMotionCfg as AistppMotionCfgBase
 from instinct_mj.motion_reference.motion_files.amass_motion_cfg import AmassMotionCfg as AmassMotionCfgBase
 from instinct_mj.motion_reference.motion_files.terrain_motion_cfg import TerrainMotionCfg as TerrainMotionCfgBase
+from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
 
 G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG

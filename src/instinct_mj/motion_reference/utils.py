@@ -15,7 +15,7 @@ from instinct_mj.utils.math import quat_angular_velocity, quat_slerp_batch
 if TYPE_CHECKING:
     from mjlab.entity import Entity
 
-    from instinct_mj.motion_reference import MotionReferenceManager
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
 
 def get_base_position_distance(
@@ -382,6 +382,65 @@ def motion_interpolate_bilinear(
     )
 
     return _root_trans, _root_quat, _joint_pos
+
+
+def pose_interpolate_bilinear(
+    pos: torch.Tensor,
+    quat: torch.Tensor,
+    validity: torch.Tensor | None,
+    source_framerate: float,
+    target_framerate: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """The bilinear interpolation function for generic pose data (e.g. objects).
+
+    Why this needs an individual function:
+    1. Object data often has an extra batch dimension (T, N, 3) for multiple objects, whereas robot motion is usually (T, 3).
+    2. Object data includes validity flags that need nearest-neighbor interpolation, which isn't handled in standard robot motion interpolation.
+    3. Separation of concerns: keeps the robot-specific kinematic interpolation separate from generic pose trajectory interpolation.
+
+    Args:
+        pos: (T, N, 3) or (T, 3) position
+        quat: (T, N, 4) or (T, 4) quaternion
+        validity: (T, N) or (T,) or None validity mask
+        source_framerate: source data framerate
+        target_framerate: target data framerate
+
+    Returns:
+        interpolated_pos, interpolated_quat, interpolated_validity
+    """
+    # Time indices calculation
+    time_max = (pos.shape[0] - 1) / source_framerate
+    num_frames_ = np.ceil(time_max * target_framerate)
+    frame_idx = torch.arange(num_frames_).to(dtype=torch.float, device=pos.device) / target_framerate * source_framerate
+    frame_idx = frame_idx[frame_idx <= (pos.shape[0] - 1)]
+
+    front_frame_idx = frame_idx.floor().long()
+    back_frame_idx = frame_idx.ceil().long()
+    ratio = frame_idx - front_frame_idx.float()
+
+    # Position Interpolation (Linear)
+    # Expand ratio to match pos dimensions: (T, 1, ..., 1)
+    ratio_pos = ratio.view(-1, *([1] * (pos.ndim - 1)))
+    _pos = pos[back_frame_idx] * ratio_pos + pos[front_frame_idx] * (1 - ratio_pos)
+
+    # Rotation Interpolation (Slerp)
+    # Flatten extra dimensions for slerp: (T * ..., 4)
+    q0 = quat[front_frame_idx]
+    q1 = quat[back_frame_idx]
+    batch_shape = q0.shape[:-1]
+
+    # Expand ratio to match batch shape
+    ratio_quat = ratio.view(-1, *([1] * (len(batch_shape) - 1))).expand(batch_shape)
+
+    _quat = quat_slerp_batch(q0.reshape(-1, 4), q1.reshape(-1, 4), ratio_quat.reshape(-1)).reshape(*batch_shape, 4)
+
+    # Validity Interpolation (Nearest Neighbor)
+    _validity = None
+    if validity is not None:
+        idx_nearest = frame_idx.round().long().clamp(max=pos.shape[0] - 1)
+        _validity = validity[idx_nearest]
+
+    return _pos, _quat, _validity
 
 
 def estimate_velocity(

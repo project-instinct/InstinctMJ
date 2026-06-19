@@ -8,7 +8,7 @@ from mjlab.sensor import SensorCfg
 
 from instinct_mj.visualization.marker_cfg import VisualizationMarkersCfg
 
-from .motion_buffer import MotionBuffer, MotionReferenceData
+from .motion_buffer import MotionBuffer, MotionReferenceData, MotionReferenceState
 from .motion_reference_manager import MotionReferenceManager
 
 
@@ -39,6 +39,14 @@ class MotionReferenceManagerCfg(SensorCfg):
 
     data_class_type: type = MotionReferenceData
     """ The class type of the motion reference data. Use this config to override the default motion reference data class. """
+
+    state_class_type: type = MotionReferenceState
+    """ The class type of the motion reference state. Use this config to override the default motion reference state class. """
+
+    scene_object_names: list[str] = field(default_factory=list)
+    """ List of object entity names in the scene config (not the robot's body).
+    The number of objects is inferred from the length of this list.
+    """
 
     robot_model_path: str | None = None
     """ Robot model (MJCF xml or URDF) path to build the robot kinematics chain.

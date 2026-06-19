@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Sequence
 
 import torch
-from mjlab.actuator.actuator import TransmissionType
+from mjlab.actuator import BuiltinPdActuator, BuiltinPositionActuator, BuiltinVelocityActuator
 from mjlab.managers import ManagerTermBase, SceneEntityCfg
 
 if TYPE_CHECKING:
@@ -32,6 +32,7 @@ class constant_reward(ManagerTermBase):
 
 
 _NON_EFFORT_CTRL_COMMAND_FIELDS = {"position", "velocity"}
+_NON_EFFORT_CTRL_ACTUATOR_TYPES = (BuiltinPdActuator, BuiltinPositionActuator, BuiltinVelocityActuator)
 
 
 def _unwrap_base_actuator(actuator):
@@ -43,10 +44,17 @@ def _unwrap_base_actuator(actuator):
 
 def _iter_joint_actuator_targets_and_stiffness(asset: Articulation):
     for actuator in asset.actuators:
-        if actuator.transmission_type != TransmissionType.JOINT:
+        if actuator.transmission_type != "joint":
             continue
         base_actuator = _unwrap_base_actuator(actuator)
         yield base_actuator.target_ids, base_actuator.cfg.stiffness
+
+
+def _actuator_ctrl_is_non_effort(actuator) -> bool:
+    ctrl_type_actuator = _unwrap_base_actuator(actuator)
+    return isinstance(ctrl_type_actuator, _NON_EFFORT_CTRL_ACTUATOR_TYPES) or (
+        getattr(ctrl_type_actuator, "command_field", None) in _NON_EFFORT_CTRL_COMMAND_FIELDS
+    )
 
 
 def _joint_applied_and_computed_torque(asset: Articulation) -> tuple[torch.Tensor, torch.Tensor]:
@@ -66,12 +74,10 @@ def _joint_applied_and_computed_torque(asset: Articulation) -> tuple[torch.Tenso
     local_ctrl = asset.data.data.ctrl[:, asset.indexing.ctrl_ids]
 
     for actuator in asset.actuators:
-        if actuator.transmission_type != TransmissionType.JOINT:
+        if actuator.transmission_type != "joint":
             continue
 
-        ctrl_type_actuator = _unwrap_base_actuator(actuator)
-
-        if getattr(ctrl_type_actuator, "command_field", None) in _NON_EFFORT_CTRL_COMMAND_FIELDS:
+        if _actuator_ctrl_is_non_effort(actuator):
             computed_values = joint_applied_torque[:, actuator.target_ids]
         else:
             computed_values = local_ctrl[:, actuator.ctrl_ids]
@@ -868,9 +874,6 @@ def applied_torque_limits_by_ratio(
     asset: Articulation = env.scene[asset_cfg.name]
 
     joint_applied_torque, _ = _joint_applied_and_computed_torque(asset)
-    if joint_applied_torque.numel() == 0:
-        return torch.zeros(env.num_envs, device=env.device)
-
     joint_effort_limits = torch.zeros_like(joint_applied_torque)
     if isinstance(asset_cfg.joint_ids, slice):
         selected_joint_ids = list(range(asset.num_joints))
@@ -883,16 +886,23 @@ def applied_torque_limits_by_ratio(
         actuator_forcerange = actuator_forcerange[0]
 
     for actuator in asset.actuators:
-        if actuator.transmission_type != TransmissionType.JOINT:
+        if actuator.transmission_type != "joint":
             continue
         target_names = list(actuator.target_names)
-        ctrl_ids_global = actuator.global_ctrl_ids
         for idx, joint_name in enumerate(target_names):
             if joint_name not in selected_joint_names:
                 continue
-            ctrl_id_global = int(ctrl_ids_global[idx])
             joint_id = int(actuator.target_ids[idx])
-            effort_limit = torch.max(torch.abs(actuator_forcerange[ctrl_id_global]))
+            if isinstance(_unwrap_base_actuator(actuator), BuiltinPdActuator):
+                joint_id_global = int(asset.indexing.joint_ids[joint_id])
+                joint_actfrcrange = env.sim.model.jnt_actfrcrange
+                if joint_actfrcrange.ndim == 3:
+                    effort_limit = torch.max(torch.abs(joint_actfrcrange[:, joint_id_global]), dim=-1).values
+                else:
+                    effort_limit = torch.max(torch.abs(joint_actfrcrange[joint_id_global]))
+            else:
+                ctrl_id_global = int(actuator.global_ctrl_ids[idx])
+                effort_limit = torch.max(torch.abs(actuator_forcerange[ctrl_id_global]))
             joint_effort_limits[:, joint_id] = torch.maximum(joint_effort_limits[:, joint_id], effort_limit)
 
     selected_effort_limits = joint_effort_limits[:, asset_cfg.joint_ids]

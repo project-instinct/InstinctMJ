@@ -9,15 +9,17 @@ from mjlab.managers import SceneEntityCfg
 from mjlab.managers.event_manager import RecomputeLevel, requires_model_fields
 from mjlab.utils.lab_api import math as math_utils
 
-from instinct_mj.motion_reference import MotionReferenceManager
+from instinct_mj.motion_reference.motion_reference_hoi_data import HoiMotionReferenceData, HoiMotionReferenceState
 
 if TYPE_CHECKING:
+    from mjlab.entity import Entity
     from mjlab.entity import Entity as Articulation
     from mjlab.entity import Entity as RigidObject
     from mjlab.envs import ManagerBasedRlEnv as ManagerBasedEnv
 
     from instinct_mj.envs.mdp import BeyondMimicAdaptiveWeighting
     from instinct_mj.motion_reference import MotionReferenceData
+    from instinct_mj.motion_reference.motion_reference_manager import MotionReferenceManager
 
 
 @requires_model_fields("body_gravcomp", recompute=RecomputeLevel.set_const_fixed)
@@ -181,6 +183,181 @@ def reset_robot_state_by_reference(
     )
 
 
+def _apply_rigid_object_states(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    object_pos: torch.Tensor,
+    object_quat: torch.Tensor,
+    object_lin_vel: torch.Tensor,
+    object_ang_vel: torch.Tensor,
+    object_validity: torch.Tensor,
+    scene_object_names: list[str],
+    invalid_object_pos: tuple[float, float, float] | None = None,
+):
+    """Helper to apply rigid object states to simulation.
+
+    Args:
+        env: The environment instance.
+        env_ids: Environment IDs to update.
+        object_pos: Object positions [N_env, N_obj, 3].
+        object_quat: Object orientations [N_env, N_obj, 4].
+        object_lin_vel: Object linear velocities [N_env, N_obj, 3].
+        object_ang_vel: Object angular velocities [N_env, N_obj, 3].
+        object_validity: Object validity mask [N_env, N_obj].
+        scene_object_names: List of object names in the scene.
+        invalid_object_pos: If not None, set invalid objects to this position (e.g. to hide them).
+            If None, invalid objects are not updated.
+    """
+    # Ensure env_ids is on the same device as data
+    if env_ids.device != object_pos.device:
+        env_ids = env_ids.to(object_pos.device)
+
+    device = object_pos.device
+    identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device, dtype=object_quat.dtype)
+    zero_vel = torch.zeros(3, device=device, dtype=object_lin_vel.dtype)
+
+    # Individual objects case
+    scene_entities = env.scene.entities
+    for obj_idx, entity_name in enumerate(scene_object_names):
+        if obj_idx >= object_validity.shape[1]:
+            break
+
+        # Use scene entity names for membership check; env.scene[key] raises KeyError for invalid keys
+        # (e.g. numeric strings like '0' from object index slots that are not scene entity names)
+        if entity_name not in scene_entities:
+            continue
+        asset: Entity = scene_entities[entity_name]
+
+        valid_mask = object_validity[:, obj_idx]
+
+        # Update valid objects
+        if valid_mask.any():
+            valid_env_ids = env_ids[valid_mask].contiguous()
+
+            root_pose = torch.cat(
+                [object_pos[valid_mask, obj_idx], object_quat[valid_mask, obj_idx]],
+                dim=-1,
+            )
+            root_velocity = torch.cat(
+                [object_lin_vel[valid_mask, obj_idx], object_ang_vel[valid_mask, obj_idx]],
+                dim=-1,
+            )
+
+            if asset.is_fixed_base:
+                if not asset.is_mocap:
+                    raise ValueError(f"Cannot apply HOI object reference to fixed non-mocap entity '{entity_name}'.")
+                asset.write_mocap_pose_to_sim(root_pose, env_ids=valid_env_ids)
+            else:
+                asset.write_root_link_pose_to_sim(root_pose, env_ids=valid_env_ids)
+                asset.write_root_link_velocity_to_sim(root_velocity, env_ids=valid_env_ids)
+
+        # Optionally set invalid objects to a fixed position
+        if invalid_object_pos is not None and (~valid_mask).any():
+            invalid_env_ids = env_ids[~valid_mask].contiguous()
+            n_invalid = invalid_env_ids.shape[0]
+            invalid_pos = (
+                torch.tensor(invalid_object_pos, device=device, dtype=object_pos.dtype)
+                .unsqueeze(0)
+                .expand(n_invalid, 3)
+            )
+            invalid_quat = identity_quat.unsqueeze(0).expand(n_invalid, 4)
+            invalid_lin_vel = zero_vel.unsqueeze(0).expand(n_invalid, 3)
+            invalid_ang_vel = zero_vel.unsqueeze(0).expand(n_invalid, 3)
+            root_pose = torch.cat([invalid_pos, invalid_quat], dim=-1)
+            root_velocity = torch.cat([invalid_lin_vel, invalid_ang_vel], dim=-1)
+            if asset.is_fixed_base:
+                if not asset.is_mocap:
+                    raise ValueError(f"Cannot apply HOI object reference to fixed non-mocap entity '{entity_name}'.")
+                asset.write_mocap_pose_to_sim(root_pose, env_ids=invalid_env_ids)
+            else:
+                asset.write_root_link_pose_to_sim(root_pose, env_ids=invalid_env_ids)
+                asset.write_root_link_velocity_to_sim(root_velocity, env_ids=invalid_env_ids)
+
+
+def reset_rigid_objects_state_by_reference(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    motion_ref_cfg: SceneEntityCfg = SceneEntityCfg("motion_reference"),
+):
+    """Reset rigid object states in scene from HOI init reference state.
+
+    This function intentionally uses object index order and ignores object-name matching.
+    """
+    motion_ref: MotionReferenceManager = env.scene[motion_ref_cfg.name]
+    init_state = motion_ref.get_init_reference_state(env_ids)
+
+    if not isinstance(init_state, HoiMotionReferenceState):
+        return
+
+    scene_object_names = getattr(motion_ref.cfg, "scene_object_names", None)
+    if not scene_object_names:
+        return
+
+    # init_state is already indexed by env_ids (get_init_reference_state returns state[env_ids]),
+    # so its tensors have shape [len(env_ids), ...] with row i mapping to env_ids[i].
+    # Do NOT index again with env_ids - that treats env IDs (e.g. 2) as positional indices
+    # and causes out-of-bounds when a subset of envs reset (e.g. env_ids=[2] -> tensor has 1 row).
+    env_ids_t = torch.as_tensor(env_ids, device=init_state.object_pos_w.device)
+
+    _apply_rigid_object_states(
+        env,
+        env_ids_t,
+        init_state.object_pos_w,
+        init_state.object_quat_w,
+        init_state.object_lin_vel_w,
+        init_state.object_ang_vel_w,
+        init_state.object_validity,
+        scene_object_names,
+    )
+    motion_ref.sync_reference_entity_state()
+
+
+def update_rigid_objects_state_by_reference(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    motion_ref_cfg: SceneEntityCfg = SceneEntityCfg("motion_reference"),
+    invalid_object_pos: tuple[float, float, float] | None = None,
+):
+    """Set rigid object states from the current HOI reference frame every step.
+
+    This function uses object index order and ignores object-name matching.
+
+    Args:
+        invalid_object_pos: If not None, set invalid (non-visible) objects to this position
+            (e.g. to hide them far from the scene). If None, invalid objects are not updated.
+    """
+    motion_ref: MotionReferenceManager = env.scene[motion_ref_cfg.name]
+    data: HoiMotionReferenceData = motion_ref.data
+    scene_object_names = getattr(motion_ref.cfg, "scene_object_names", None)
+    if not scene_object_names:
+        return
+
+    if not all(
+        hasattr(data, attr)
+        for attr in ("object_pos_w", "object_quat_w", "object_lin_vel_w", "object_ang_vel_w", "object_validity")
+    ):
+        return
+
+    # Always use all env ids to avoid block index / out-of-bounds when interval event passes a subset.
+    # Object pose updates must run for all envs to keep motion reference in sync.
+    num_envs = env.scene.num_envs
+    all_env_ids = torch.arange(num_envs, device=data.object_pos_w.device, dtype=torch.long)
+
+    # data shape is [N, T, O, ...]; use the first target frame.
+    _apply_rigid_object_states(
+        env,
+        all_env_ids,
+        data.object_pos_w[:, 0],
+        data.object_quat_w[:, 0],
+        data.object_lin_vel_w[:, 0],
+        data.object_ang_vel_w[:, 0],
+        data.object_validity[:, 0],
+        scene_object_names,
+        invalid_object_pos,
+    )
+    motion_ref.sync_reference_entity_state()
+
+
 def beyondmimic_bin_fail_counter_smoothing(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor,
@@ -190,6 +367,13 @@ def beyondmimic_bin_fail_counter_smoothing(
     curriculum: BeyondMimicAdaptiveWeighting = env.curriculum_manager._term_cfgs[
         env.curriculum_manager._term_names.index(curriculum_name)
     ].func
+
+    if (
+        getattr(curriculum, "enabled", True) is False
+        or curriculum.motion_bin_fail_counter is None
+        or curriculum.current_motion_bin_fail_counter is None
+    ):
+        return
 
     curriculum.motion_bin_fail_counter._concatenated_tensor.mul_(1 - curriculum.adaptive_alpha)
     curriculum.motion_bin_fail_counter._concatenated_tensor.add_(

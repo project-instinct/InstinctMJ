@@ -21,7 +21,7 @@ class AmassMotionCfg(MotionBufferCfg):
     """ the path to the motion dataset """
 
     supported_file_endings: Sequence[str] = field(
-        default_factory=lambda: ["poses.npz", "stageii.npz", "retargetted.npz", "retargeted.npz"]
+        default_factory=lambda: ["poses.npz", "stageii.npz", "retargetted.npz", "retargeted.npz", "soma.csv"]
     )
     """ At initialization stage, AmassMotion will walk through `cfg.path` and collect all files ending with
     `supported_file_endings`
@@ -49,6 +49,11 @@ class AmassMotionCfg(MotionBufferCfg):
 
     motion_target_framerate: float = 50.0
     """ The target framerate of the motion data. The motion data will be interpolated to this framerate if the interpolate func is provided.
+    """
+
+    assumed_file_framerate: float = 120.0
+    """ The assumed framerate to use for motion files that do not store framerate metadata.
+    For example, `soma.csv` files use this value directly.
     """
 
     velocity_estimation_method: Literal["frontward", "backward", "frontbackward", None] = "frontward"

@@ -33,9 +33,7 @@ class CaseScale:
 
 def _parse_case_scale(text: str) -> CaseScale:
     if "=" not in text:
-        raise argparse.ArgumentTypeError(
-            f"Invalid --case-scale '{text}'. Expected the form CASE=SCALE."
-        )
+        raise argparse.ArgumentTypeError(f"Invalid --case-scale '{text}'. Expected the form CASE=SCALE.")
     case_name, scale_text = text.split("=", 1)
     case_name = case_name.strip()
     if not case_name:
@@ -43,9 +41,7 @@ def _parse_case_scale(text: str) -> CaseScale:
     try:
         terrain_scale = float(scale_text)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"Invalid terrain scale '{scale_text}' for case '{case_name}'."
-        ) from exc
+        raise argparse.ArgumentTypeError(f"Invalid terrain scale '{scale_text}' for case '{case_name}'.") from exc
     return CaseScale(name=case_name, terrain_scale=terrain_scale)
 
 
@@ -58,8 +54,7 @@ def _load_motion_payload(path: str) -> dict[str, np.ndarray | list[str] | float]
 
     if len(joint_names) != joint_pos.shape[1]:
         raise ValueError(
-            f"Joint name count mismatch in {path}: "
-            f"{len(joint_names)} names vs {joint_pos.shape[1]} joint columns."
+            f"Joint name count mismatch in {path}: {len(joint_names)} names vs {joint_pos.shape[1]} joint columns."
         )
 
     return {
@@ -239,9 +234,7 @@ def main(args: argparse.Namespace) -> None:
 
 
 def entry_point() -> None:
-    parser = argparse.ArgumentParser(
-        description="Prepare OmniRetargeting terrain-motion pairs for InstinctMJ."
-    )
+    parser = argparse.ArgumentParser(description="Prepare OmniRetargeting terrain-motion pairs for InstinctMJ.")
     parser.add_argument(
         "--input-root",
         type=str,
