@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
@@ -416,6 +417,7 @@ class MotionReferenceManager(Sensor):
 
         # Reset motion buffer selection and resample selection
         self._reset_motion_buffers(env_ids)
+        self._reset_data(env_ids)
         self._resample_buffer_collate_params(env_ids)
         self._resample_update_period(env_ids)
 
@@ -636,6 +638,33 @@ class MotionReferenceManager(Sensor):
     Manager's internal operations.
     """
 
+    def _prepare_data_class_kwargs(self) -> dict:
+        """Prepare the kwargs for the data class `make_empty` method."""
+        make_empty_kwargs: dict = {
+            "device": self.device,
+            "num_joints": self._num_joints,
+            "num_links": self.num_link_to_ref,
+        }
+        sig = inspect.signature(self.cfg.data_class_type.make_empty)
+        if "num_objects" in sig.parameters:
+            scene_object_names = getattr(self.cfg, "scene_object_names", [])
+            make_empty_kwargs["num_objects"] = len(scene_object_names)
+            make_empty_kwargs["scene_object_names"] = scene_object_names
+        return make_empty_kwargs
+
+    def _prepare_state_class_kwargs(self) -> dict:
+        """Prepare the kwargs for the state class `make_empty` method."""
+        make_empty_kwargs: dict = {
+            "device": self.device,
+            "num_joints": self._num_joints,
+        }
+        sig = inspect.signature(self.cfg.state_class_type.make_empty)
+        if "num_objects" in sig.parameters:
+            scene_object_names = getattr(self.cfg, "scene_object_names", [])
+            make_empty_kwargs["num_objects"] = len(scene_object_names)
+            make_empty_kwargs["scene_object_names"] = scene_object_names
+        return make_empty_kwargs
+
     def _resolve_entity(self, entity_name: str):
         if not self._entities:
             raise RuntimeError(
@@ -656,20 +685,18 @@ class MotionReferenceManager(Sensor):
         self._ALL_INDICES = torch.arange(self._num_envs, device=self.device)
         self.sim_joint_names = list(self._entity.joint_names)
 
+        make_empty_data_kwargs = self._prepare_data_class_kwargs()
+
         self._data = self.cfg.data_class_type.make_empty(
             self._num_envs,
             self.cfg.num_frames,
-            self._num_joints,
-            self.num_link_to_ref,
-            device=self.device,
+            **make_empty_data_kwargs,
         )
 
         self._reference_frame = self.cfg.data_class_type.make_empty(
             self._num_envs,
             1,  # num_frames
-            self._num_joints,
-            self.num_link_to_ref,
-            device=self.device,
+            **make_empty_data_kwargs,
         )
         # Add an additional timestamp to the reference frame data, which is used for lazy update of the reference frame.
         self._reference_frame_timestamp = torch.zeros(self._num_envs, device=self.device)
@@ -682,10 +709,11 @@ class MotionReferenceManager(Sensor):
         self._data_timestamp_last_update = torch.zeros(self._num_envs, device=self.device)
         self._is_outdated = torch.ones(self._num_envs, dtype=torch.bool, device=self.device)
 
-        self._init_reference_state = MotionReferenceState.make_empty(
+        make_empty_state_kwargs = self._prepare_state_class_kwargs()
+
+        self._init_reference_state = self.cfg.state_class_type.make_empty(
             self._num_envs,
-            self._num_joints,
-            device=self.device,
+            **make_empty_state_kwargs,
         )
 
         self._aiming_frame_idx = TimestampedBuffer()
@@ -801,6 +829,11 @@ class MotionReferenceManager(Sensor):
                 env_ids=env_ids[env_ids_this_buffer_mask],  # type: ignore
                 symmetric_augmentation_mask_buffer=self._env_symmetric_augmentation_mask,
             )
+
+    def _reset_data(self, env_ids: Sequence[int] | torch.Tensor):
+        """Reset the reference data / reference frame for the given env_ids."""
+        self._data.reset(env_ids)
+        self._reference_frame.reset(env_ids)
 
     def _resample_buffer_collate_params(self, env_ids: Sequence[int] | torch.Tensor | None = None):
         """Resample values for motion collate behaviors for the given env_ids. E.g. frame_interval_s,
@@ -1069,6 +1102,15 @@ class MotionReferenceManager(Sensor):
         if self.cfg.reference_entity_name is None:
             return
         self._reference_entity = self._resolve_entity(self.cfg.reference_entity_name)
+
+    def sync_reference_entity_state(self):
+        """Set the configured reference entity to the current motion reference state."""
+        if self.cfg.reference_entity_name is None:
+            return
+        if self._reference_entity is None:
+            self._find_reference_view()
+        if self._reference_entity is not None:
+            self._set_reference_view_state()
 
     def _set_reference_view_state(self):
         """Set the articulation view to the reference state for motion visualization."""

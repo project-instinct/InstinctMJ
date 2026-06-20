@@ -287,12 +287,14 @@ def _terminations_cfg() -> dict[str, DoneTerm]:
 def _events_cfg() -> dict[str, Event]:
     return {
         "physics_material": Event(
-            func=locomotion_mdp.randomize_rigid_body_material,
+            func=instinct_mdp.randomize_rigid_body_material,
             mode="startup",
             params={
                 "asset_cfg": SceneEntityCfg("robot", geom_names=(".*",)),
                 "static_friction_range": (0.25, 0.8),
                 "dynamic_friction_range": (0.2, 0.6),
+                "restitution_range": (0.0, 0.8),
+                "num_buckets": 64,
             },
         ),
         "add_base_mass": Event(

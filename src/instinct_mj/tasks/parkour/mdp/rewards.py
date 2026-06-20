@@ -7,11 +7,11 @@ from mjlab.managers import SceneEntityCfg
 from mjlab.sensor import ContactSensor, RayCastSensor
 from mjlab.utils.lab_api.math import quat_apply_inverse
 
+from instinct_mj.envs.mdp.rewards.regularizations import _unwrap_base_actuator
 from instinct_mj.envs.mdp.rewards.regularizations import (
     applied_torque_limits_by_ratio as _applied_torque_limits_by_ratio_general,
 )
 from instinct_mj.envs.mdp.rewards.regularizations import motors_power_square as _motors_power_square_general
-from instinct_mj.envs.mdp.rewards.regularizations import _unwrap_base_actuator
 
 if TYPE_CHECKING:
     from mjlab.entity import Entity

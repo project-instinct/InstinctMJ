@@ -97,27 +97,6 @@ def stand_still(
     )
 
 
-def feet_slide(
-    env,
-    sensor_name: str,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    threshold: float = 0.1,
-    ang_vel_penalty: bool = False,
-) -> torch.Tensor:
-    """Penalize body sliding while in contact."""
-    asset: Entity = env.scene[asset_cfg.name]
-    sensor: ContactSensor = env.scene[sensor_name]
-
-    in_contact = torch.max(torch.linalg.vector_norm(sensor.data.force_history, dim=-1), dim=2)[0] > threshold
-
-    body_vel = asset.data.body_link_lin_vel_w[:, asset_cfg.body_ids, :2]
-    reward = torch.sum(torch.norm(body_vel, dim=-1) * in_contact.float(), dim=1)
-    if ang_vel_penalty:
-        body_ang_vel = asset.data.body_link_ang_vel_w[:, asset_cfg.body_ids, :2]
-        reward = reward + torch.sum(torch.norm(body_ang_vel, dim=-1) * in_contact.float(), dim=1)
-    return reward
-
-
 def joint_deviation_l1(
     env,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),

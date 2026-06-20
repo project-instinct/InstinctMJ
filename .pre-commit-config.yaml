@@ -1,9 +1,22 @@
+exclude: |
+  (?x)^(
+    logs/|
+    log/|
+    outputs/|
+    runs/|
+    wandb/|
+    videos/|
+    build/|
+    dist/|
+    obj/|
+    src/instinct_mj\.egg-info/
+  )
+
 repos:
   - repo: https://github.com/python/black
     rev: 23.10.1
     hooks:
       - id: black
-        args: ["--line-length", "120", "--preview"]
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
     hooks:
@@ -24,18 +37,18 @@ repos:
     hooks:
       - id: isort
         name: isort (python)
-        args: ["--profile", "black", "--filter-files"]
+        args: ["--filter-files"]
   - repo: https://github.com/asottile/pyupgrade
     rev: v3.15.0
     hooks:
       - id: pyupgrade
-        args: ["--py37-plus"]
+        args: ["--py310-plus"]
   - repo: https://github.com/codespell-project/codespell
     rev: v2.2.6
     hooks:
       - id: codespell
         additional_dependencies:
-          - tomli
+        - tomli
   - repo: https://github.com/pre-commit/pygrep-hooks
     rev: v1.10.0
     hooks:

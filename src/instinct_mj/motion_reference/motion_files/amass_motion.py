@@ -540,6 +540,8 @@ class AmassMotion(MotionBuffer):
             return self._read_amass_motion_file(filepath)
         elif filepath.endswith("retargetted.npz") or filepath.endswith("retargeted.npz"):
             return self._read_retargetted_motion_file(filepath)
+        elif filepath.endswith("soma.csv"):
+            return self._read_retargeted_soma_motion_file(filepath)
         else:
             raise ValueError(f"Unsupported file type: {filepath}")
 
@@ -568,6 +570,56 @@ class AmassMotion(MotionBuffer):
 
         # qpos_sim = qpos[retargetted_joints_to_output_joints_ids]
         retargetted_joints_to_output_joints_ids = [joint_names.index(j_name) for j_name in self.sim_joint_names]
+        joint_pos = joint_pos[:, retargetted_joints_to_output_joints_ids]
+
+        return self._pack_retargetted_motion_sequence(
+            root_trans,
+            root_quat,
+            joint_pos,
+            framerate,
+        )
+
+    def _read_retargeted_soma_motion_file(self, filepath: str) -> MotionSequence:
+        with open(filepath, encoding="utf-8-sig") as f:
+            header = f.readline().strip().split(",")
+        if len(header) < 8:
+            raise ValueError(f"Invalid soma CSV format in {filepath}: expected at least 8 columns, got {len(header)}.")
+
+        raw_values = np.loadtxt(filepath, delimiter=",", skiprows=1, dtype=np.float32)
+        if raw_values.ndim == 1:
+            raw_values = raw_values[None, :]
+        if raw_values.shape[1] != len(header):
+            raise ValueError(
+                "Soma CSV header/data column mismatch: "
+                f"{filepath} has {len(header)} header columns but {raw_values.shape[1]} data columns."
+            )
+        framerate = self.cfg.assumed_file_framerate
+
+        joint_names = header[7:]
+
+        # Translation: cm to meters
+        root_trans = torch.as_tensor(raw_values[:, 1:4] * 0.01, dtype=torch.float, device=self.buffer_device)
+
+        # Rotation: Euler XYZ degrees to Quaternion (w, x, y, z)
+        euler_xyz = torch.as_tensor(np.deg2rad(raw_values[:, 4:7]), dtype=torch.float, device=self.buffer_device)
+        root_quat = math_utils.quat_from_euler_xyz(euler_xyz[:, 0], euler_xyz[:, 1], euler_xyz[:, 2])
+
+        # Joints: degrees to radians
+        joint_pos = torch.as_tensor(np.deg2rad(raw_values[:, 7:]), dtype=torch.float, device=self.buffer_device)
+
+        # Map joints to sim_joint_names
+        # The CSV header from soma retargeter typically appends "_dof" to joint names
+        joint_names_clean = [j.replace("_dof", "") for j in joint_names]
+
+        missing_joints = [j_name for j_name in self.sim_joint_names if j_name not in joint_names_clean]
+        if missing_joints:
+            raise ValueError(
+                "Joint mapping failed for soma CSV. Missing joints required by the articulation: "
+                f"{missing_joints}. File: {filepath}"
+            )
+
+        retargetted_joints_to_output_joints_ids = [joint_names_clean.index(j_name) for j_name in self.sim_joint_names]
+
         joint_pos = joint_pos[:, retargetted_joints_to_output_joints_ids]
 
         return self._pack_retargetted_motion_sequence(

@@ -21,9 +21,9 @@ from instinct_mj.assets.unitree_g1 import (
     beyondmimic_g1_29dof_delayed_actuator_cfgs,
 )
 from instinct_mj.monitors import ActuatorMonitorTerm, MonitorTermCfg, ShadowingBasePosMonitorTerm
-from instinct_mj.motion_reference import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.motion_files.amass_motion_cfg import AmassMotionCfg as AmassMotionCfgBase
 from instinct_mj.motion_reference.motion_files.terrain_motion_cfg import TerrainMotionCfg as TerrainMotionCfgBase
+from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
 
 G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
@@ -62,16 +62,15 @@ def _write_single_motion_metadata(
     else:
         matched_entries = [entry for entry in motion_files if entry["motion_file"] == selected_motion_file]
         if len(matched_entries) == 0:
-            raise ValueError(
-                f"Motion file '{selected_motion_file}' is not present in metadata '{metadata_yaml}'."
-            )
+            raise ValueError(f"Motion file '{selected_motion_file}' is not present in metadata '{metadata_yaml}'.")
         selected_entry = matched_entries[0]
 
     terrain_id = selected_entry["terrain_id"]
     terrains = [terrain for terrain in metadata["terrains"] if terrain["terrain_id"] == terrain_id]
     if len(terrains) == 0:
         raise ValueError(
-            f"Terrain id '{terrain_id}' referenced by '{selected_entry['motion_file']}' was not found in '{metadata_yaml}'."
+            f"Terrain id '{terrain_id}' referenced by '{selected_entry['motion_file']}' was not found in"
+            f" '{metadata_yaml}'."
         )
 
     os.makedirs(os.path.dirname(output_yaml), exist_ok=True)
@@ -260,8 +259,6 @@ class G1PerceptiveShadowingEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
         self.sim.nconmax = 128
         self.sim.mujoco.jacobian = "sparse"
         self.sim.mujoco.ccd_iterations = 128
-        # Keep multiccd disabled under mjlab's flag-based MuJoCo API.
-        self.sim.mujoco.enableflags = tuple(flag for flag in self.sim.mujoco.enableflags if flag != "multiccd")
 
         MOTION_NAME = list(motion_reference_cfg.motion_buffers.keys())[0]
         motion_buffer = motion_reference_cfg.motion_buffers[MOTION_NAME]

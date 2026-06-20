@@ -42,5 +42,5 @@ class AistppMotion(AmassMotion):
         raw_data = joblib.load(self._all_motion_files[motion_file_idx])
         poses = torch.from_numpy(raw_data["smpl_poses"]).to(self.buffer_device)
         root_trans = torch.from_numpy(raw_data["smpl_trans"]).to(self.buffer_device)
-        framerate = 60.0  # refer to https://arxiv.org/pdf/2101.08779
+        framerate = self.cfg.assumed_file_framerate
         return self._build_motion_sequence_from_smpl(poses, root_trans, framerate)

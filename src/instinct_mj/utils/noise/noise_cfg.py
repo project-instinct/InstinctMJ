@@ -324,3 +324,20 @@ class StereoTooCloseNoiseCfg(ImageNoiseCfg):
     func: Callable[[torch.Tensor, StereoTooCloseNoiseCfg, torch.Tensor | Sequence[int]], torch.Tensor] = (
         noise_model.stereo_too_close_noise
     )
+
+
+@dataclass(kw_only=True)
+class SensorDeadNoiseCfg(ImageNoiseCfg):
+    """Configuration for adding sensor dead behavior, which might be autonomous restarted.
+    Thus causing some frames of non-refreshed data.
+    """
+
+    dead_probability: float = 0.01
+    """The probability of the sensor dead."""
+
+    dead_frames: int | list[int] = 90
+    """The number of frames to be non-refreshed (before the sensor is restarted).
+    Can be a single number or a list of numbers to be uniformly selected from.
+    """
+
+    func: type[noise_model.SensorDeadNoiseModel] = noise_model.SensorDeadNoiseModel

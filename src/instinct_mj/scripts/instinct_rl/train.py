@@ -7,6 +7,7 @@ import os
 import re
 import signal
 import sys
+import tempfile
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ import mjlab
 import torch
 import torch.distributed as dist
 import tyro
+import warp as wp
 from instinct_rl.runners import OnPolicyRunner
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
@@ -288,6 +290,25 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
 
     if device.startswith("cuda"):
         os.environ["MUJOCO_EGL_DEVICE_ID"] = str(_parse_cuda_device_index(device))
+        if is_distributed:
+            # Each rank compiles Warp kernels into its own node-local cache so
+            # concurrent JIT compilation cannot collide (a shared cache on a
+            # networked home has unreliable cross-process file locks). Override
+            # any inherited WARP_CACHE_PATH because a shared preset would put
+            # cold multi-rank compilation back in the same directory.
+            _job_tag = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
+            _warp_cache = os.path.join(tempfile.gettempdir(), f"warp_cache_{_job_tag}_rank{rank}")
+            os.environ["WARP_CACHE_PATH"] = _warp_cache
+            # Warp reads WARP_CACHE_PATH during import/init; train.py may have
+            # imported Warp helpers already, so set the config directly before
+            # the first training-time kernel compile/launch.
+            wp.config.kernel_cache_dir = _warp_cache
+        # Align the Warp default device with this rank so multi-GPU sensor
+        # kernels (ray-cast continuation passes) launch on the rank device.
+        wp.set_device(device)
+        if is_distributed:
+            _wcp = os.environ.get("WARP_CACHE_PATH")
+            print(f"[INFO] rank={rank} warp_cache={_wcp} resolved={wp.config.kernel_cache_dir}", flush=True)
 
     viewer_enabled = cfg.viewer == "native" and rank == 0
     video_enabled = cfg.video and rank == 0

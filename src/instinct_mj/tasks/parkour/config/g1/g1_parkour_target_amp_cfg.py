@@ -11,7 +11,6 @@ import math
 import os
 from dataclasses import dataclass, field
 
-import mjlab.envs.mdp as envs_mdp
 import mujoco
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
@@ -36,7 +35,7 @@ from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env
 from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.viewer.viewer_config import ViewerConfig
 
-import instinct_mj.envs.mdp as instinct_envs_mdp
+import instinct_mj.envs.mdp as envs_mdp
 import instinct_mj.tasks.parkour.mdp as parkour_mdp
 from instinct_mj.assets.unitree_g1 import (
     G1_MJCF_PATH,
@@ -45,18 +44,11 @@ from instinct_mj.assets.unitree_g1 import (
     beyondmimic_action_scale,
     beyondmimic_g1_29dof_delayed_actuator_cfgs,
 )
-from instinct_mj.motion_reference import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.motion_files.amass_motion_cfg import AmassMotionCfg as AmassMotionCfgBase
+from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mj.sensors.volume_points import Grid3dPointsGeneratorCfg, VolumePointsCfg
-from instinct_mj.tasks.mdp import (
-    parkour_amp_reference_base_ang_vel,
-    parkour_amp_reference_base_lin_vel,
-    parkour_amp_reference_joint_pos_rel,
-    parkour_amp_reference_joint_vel_rel,
-    parkour_amp_reference_projected_gravity,
-)
 from instinct_mj.tasks.parkour.config.parkour_env_cfg import (
     ROUGH_TERRAINS_CFG,
     ROUGH_TERRAINS_CFG_PLAY,
@@ -184,8 +176,6 @@ def instinct_g1_parkour_amp_env_cfg(
     cfg.sim.mujoco.iterations = 10
     cfg.sim.mujoco.ls_iterations = 20
     cfg.sim.mujoco.ccd_iterations = 128
-    # Keep multiccd disabled under mjlab's flag-based MuJoCo API.
-    cfg.sim.mujoco.enableflags = tuple(flag for flag in cfg.sim.mujoco.enableflags if flag != "multiccd")
     robot_cfg = cfg.scene.entities["robot"]
     robot_cfg.articulation.actuators = copy.deepcopy(beyondmimic_g1_29dof_delayed_actuator_cfgs)
     joint_pos_action: JointPositionActionCfg = cfg.actions["joint_pos"]
@@ -426,7 +416,7 @@ def instinct_g1_parkour_amp_env_cfg(
             flatten_history_dim=True,
         ),
         "depth_image": ObservationTermCfg(
-            func=instinct_envs_mdp.delayed_visualizable_image,
+            func=envs_mdp.delayed_visualizable_image,
             params={
                 "data_type": "distance_to_image_plane_noised_history",
                 "sensor_cfg": SceneEntityCfg("camera"),
@@ -491,7 +481,7 @@ def instinct_g1_parkour_amp_env_cfg(
             flatten_history_dim=True,
         ),
         "depth_image": ObservationTermCfg(
-            func=instinct_envs_mdp.delayed_visualizable_image,
+            func=envs_mdp.delayed_visualizable_image,
             params={
                 "data_type": "distance_to_image_plane_noised_history",
                 "sensor_cfg": SceneEntityCfg("camera"),
@@ -518,6 +508,7 @@ def instinct_g1_parkour_amp_env_cfg(
     amp_policy_terms = {
         "projected_gravity": ObservationTermCfg(
             func=envs_mdp.projected_gravity,
+            params={"asset_cfg": SceneEntityCfg("robot")},
             history_length=10,
             flatten_history_dim=True,
         ),
@@ -526,7 +517,7 @@ def instinct_g1_parkour_amp_env_cfg(
             params={
                 "asset_cfg": SceneEntityCfg(
                     name="robot",
-                    joint_names=".*",
+                    preserve_order=True,
                 )
             },
             history_length=10,
@@ -537,7 +528,7 @@ def instinct_g1_parkour_amp_env_cfg(
             params={
                 "asset_cfg": SceneEntityCfg(
                     name="robot",
-                    joint_names=".*",
+                    preserve_order=True,
                 )
             },
             scale=0.05,
@@ -559,42 +550,38 @@ def instinct_g1_parkour_amp_env_cfg(
     }
     amp_reference_terms = {
         "projected_gravity": ObservationTermCfg(
-            func=parkour_amp_reference_projected_gravity,
+            func=envs_mdp.projected_gravity_reference_as_state,
             params={"asset_cfg": SceneEntityCfg(name="motion_reference")},
             history_length=10,
             flatten_history_dim=True,
         ),
         "joint_pos_rel": ObservationTermCfg(
-            func=parkour_amp_reference_joint_pos_rel,
+            func=envs_mdp.joint_pos_rel_reference_as_state,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    name="motion_reference",
-                    joint_names=".*",
-                )
+                "asset_cfg": SceneEntityCfg(name="motion_reference"),
+                "robot_cfg": SceneEntityCfg(name="robot"),
             },
             history_length=10,
             flatten_history_dim=True,
         ),
         "joint_vel": ObservationTermCfg(
-            func=parkour_amp_reference_joint_vel_rel,
+            func=envs_mdp.joint_vel_rel_reference_as_state,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    name="motion_reference",
-                    joint_names=".*",
-                )
+                "asset_cfg": SceneEntityCfg(name="motion_reference"),
+                "robot_cfg": SceneEntityCfg(name="robot"),
             },
             scale=0.05,
             history_length=10,
             flatten_history_dim=True,
         ),
         "base_lin_vel": ObservationTermCfg(
-            func=parkour_amp_reference_base_lin_vel,
+            func=envs_mdp.base_lin_vel_reference_as_state,
             params={"asset_cfg": SceneEntityCfg(name="motion_reference")},
             history_length=10,
             flatten_history_dim=True,
         ),
         "base_ang_vel": ObservationTermCfg(
-            func=parkour_amp_reference_base_ang_vel,
+            func=envs_mdp.base_ang_vel_reference_as_state,
             params={"asset_cfg": SceneEntityCfg(name="motion_reference")},
             history_length=10,
             flatten_history_dim=True,
@@ -802,7 +789,7 @@ def instinct_g1_parkour_amp_env_cfg(
     cfg.terminations = {
         "time_out": TerminationTermCfg(func=envs_mdp.time_out, time_out=True),
         "terrain_out_bound": TerminationTermCfg(
-            func=instinct_envs_mdp.terrain_out_of_bounds,
+            func=envs_mdp.terrain_out_of_bounds,
             time_out=True,
             params={"distance_buffer": 2.0},
         ),
@@ -819,7 +806,7 @@ def instinct_g1_parkour_amp_env_cfg(
             params={"minimum_height": 0.5},
         ),
         "dataset_exhausted": TerminationTermCfg(
-            func=instinct_envs_mdp.dataset_exhausted,
+            func=envs_mdp.dataset_exhausted,
             time_out=True,
             params={
                 "reference_cfg": SceneEntityCfg(name="motion_reference"),
@@ -856,11 +843,10 @@ def instinct_g1_parkour_amp_env_cfg(
             },
         ),
         "register_virtual_obstacles": EventTermCfg(
-            func=instinct_envs_mdp.register_virtual_obstacle_to_sensor,
+            func=envs_mdp.register_virtual_obstacle_to_sensor,
             mode="startup",
             params={
                 "sensor_cfgs": SceneEntityCfg("leg_volume_points"),
-                "enable_debug_vis": False,
             },
         ),
         "reset_robot_joints": EventTermCfg(
@@ -909,7 +895,6 @@ def instinct_g1_parkour_amp_env_cfg(
         leg_volume_points_sensor.debug_vis = True
 
         cfg.scene.terrain.collision_debug_vis = False
-        cfg.events["register_virtual_obstacles"].params["enable_debug_vis"] = False
         cfg.commands["base_velocity"].debug_vis = True
         cfg.commands["base_velocity"].patch_vis = False
         cfg.terminations["root_height"] = None

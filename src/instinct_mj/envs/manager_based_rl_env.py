@@ -101,6 +101,7 @@ class InstinctRlEnv(ManagerBasedRlEnv):
             print_info(f"[INFO] {self.reward_manager}")
 
         self.monitor_manager = MonitorManager(self.cfg.monitors, self)
+        print_info(f"[INFO] Monitor Manager: {self.monitor_manager}")
 
     @staticmethod
     def _as_multi_reward_cfg(rewards_cfg):
