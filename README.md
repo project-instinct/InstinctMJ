@@ -40,30 +40,34 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
 ## Installation
 
 - Recommended Python range: `3.10` to `3.13` (`requires-python = ">=3.10,<3.14"`).
-- Stable top-level runtime matrix currently locked by `pyproject.toml` / `uv.lock`:
-  - `mjlab==1.4.0`
-  - `mujoco==3.8.1`
-  - `mujoco-warp==3.8.1`
-  - `warp-lang==1.13.0`
-- Current non-release exceptions in the resolved environment:
-  - `instinct_rl` is still sourced from Git, currently locked to commit `3a2844890387eda6d93a4465cdef9e767aba8546`.
-- This means `InstinctMJ` no longer pins nightly `mjlab` / `mujoco` / `mujoco-warp` artifacts; the remaining Git source is the Project-Instinct training package.
+- Current runtime matrix locked by `pyproject.toml` / `uv.lock`:
+  - `mjlab==1.4.0`, resolved from the editable sibling checkout at `../mjlab` when using `uv`.
+  - `mujoco==3.10.0.dev925204136`, resolved from the MuJoCo nightly index through the `uv` override.
+  - `mujoco-warp==3.9.0.1`, sourced from `google-deepmind/mujoco_warp` commit `e65a72e49a978a3051e7942bc5591df355ba0b5c`.
+  - `warp-lang==1.14.0`.
+  - `mjviser==0.0.14` and `rsl-rl-lib==5.4.0` via the current `mjlab` dependency set.
+- Other non-release sources in the resolved environment:
+  - `instinct_rl` is sourced from Git, currently locked to commit `3a2844890387eda6d93a4465cdef9e767aba8546`.
 
-### Stable install with `uv` (recommended)
+### Workspace install with `uv` (recommended)
 
-Use this path if you want the environment that matches the checked-in lock file.
+Use this path if you want the environment that matches the checked-in lock file. The `uv` source table points `mjlab` to `../mjlab`, so keep `mjlab`, `instinct_rl`, and `InstinctMJ` as sibling checkouts.
 
 ```bash
+mkdir -p <workspace_dir>
+cd <workspace_dir>
+
+git clone https://github.com/mujocolab/mjlab.git
+git clone https://github.com/project-instinct/instinct_rl.git
 git clone https://github.com/project-instinct/InstinctMJ.git
+
 cd InstinctMJ
 uv sync
 ```
 
-This installs the locked release stack from `pyproject.toml` / `uv.lock` and does not require a local `mjlab` checkout.
-
 ### Editable multi-repo workspace (optional)
 
-Use this path only if you want to develop against local sibling checkouts of `mjlab` and `instinct_rl`.
+Use this path if you want to explicitly reinstall the sibling checkouts into the `InstinctMJ` environment after `uv sync`.
 
 ```bash
 mkdir -p <workspace_dir>
@@ -73,9 +77,7 @@ cd <workspace_dir>
 git clone https://github.com/mujocolab/mjlab.git
 git clone https://github.com/project-instinct/instinct_rl.git
 git clone https://github.com/project-instinct/InstinctMJ.git
-cd mjlab
-git checkout v1.4.0
-cd ../InstinctMJ
+cd InstinctMJ
 uv sync
 uv pip install --python .venv/bin/python --no-deps -e ../mjlab -e ../instinct_rl
 
@@ -85,14 +87,15 @@ uv pip install --python .venv/bin/python --no-deps -e ../mjlab -e ../instinct_rl
 # git clone git@github.com:project-instinct/InstinctMJ.git
 ```
 
-If you skip the final editable reinstall, `uv` will keep using the version-pinned sources recorded in `pyproject.toml` / `uv.lock`.
+If you skip the final editable reinstall, `uv` still uses the editable `../mjlab` source recorded in `pyproject.toml` / `uv.lock`; only `instinct_rl` remains pinned to the Git commit in the lock file.
 
 ### `pip` alternative
 
-If you prefer `pip`, keep the same top-level pins explicitly:
+If you prefer `pip`, keep the same top-level sources explicitly:
 
 ```bash
-pip install "mujoco~=3.8.0" "mujoco-warp>=3.8.0.3,~=3.8.0" "warp-lang>=1.12.0" "mjlab==1.4.0"
+pip install "mujoco~=3.8.0" "warp-lang>=1.14.0" "mjlab==1.4.0"
+pip install "mujoco-warp @ git+https://github.com/google-deepmind/mujoco_warp.git@e65a72e49a978a3051e7942bc5591df355ba0b5c"
 pip install -e "git+https://github.com/project-instinct/instinct_rl.git@3a2844890387eda6d93a4465cdef9e767aba8546#egg=instinct_rl"
 pip install -e .
 ```

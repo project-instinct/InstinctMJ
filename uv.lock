@@ -652,7 +652,7 @@ requires-dist = [
     { name = "mediapy", specifier = ">=1.2.0" },
     { name = "mjlab", editable = "../mjlab" },
     { name = "mujoco", specifier = "~=3.8.0", index = "https://py.mujoco.org/" },
-    { name = "mujoco-warp", git = "https://github.com/google-deepmind/mujoco_warp?rev=88b55fc2696960b927bc12584994bb8412b36558" },
+    { name = "mujoco-warp", git = "https://github.com/google-deepmind/mujoco_warp?rev=e65a72e49a978a3051e7942bc5591df355ba0b5c" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "numpy-quaternion" },
     { name = "onnxruntime" },
@@ -665,7 +665,7 @@ requires-dist = [
     { name = "regex", specifier = ">=2024.0.0" },
     { name = "scikit-learn" },
     { name = "tyro", specifier = ">=1.0.1" },
-    { name = "warp-lang", specifier = ">=1.12.0" },
+    { name = "warp-lang", specifier = ">=1.14.0" },
 ]
 
 [[package]]
@@ -1006,12 +1006,12 @@ dependencies = [
 requires-dist = [
     { name = "imageio-ffmpeg" },
     { name = "mediapy", specifier = ">=1.2.6" },
-    { name = "mjviser", git = "https://github.com/mujocolab/mjviser?rev=1bdfd6fe79066b847a5f430000fcfbb53ec31a6f" },
+    { name = "mjviser", specifier = ">=0.0.14" },
     { name = "mujoco", specifier = "~=3.8.0", index = "https://py.mujoco.org/" },
-    { name = "mujoco-warp", git = "https://github.com/google-deepmind/mujoco_warp?rev=88b55fc2696960b927bc12584994bb8412b36558" },
+    { name = "mujoco-warp", git = "https://github.com/google-deepmind/mujoco_warp?rev=e65a72e49a978a3051e7942bc5591df355ba0b5c" },
     { name = "onnxscript", specifier = ">=0.5.4" },
     { name = "prettytable" },
-    { name = "rsl-rl-lib", specifier = "==5.2.0" },
+    { name = "rsl-rl-lib", specifier = "==5.4.0" },
     { name = "scipy", specifier = ">=1.15" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "tensordict" },
@@ -1026,8 +1026,8 @@ requires-dist = [
     { name = "tyro", specifier = ">=1.0.1" },
     { name = "viser", specifier = ">=1.0.27" },
     { name = "wandb", specifier = ">=0.22.3" },
-    { name = "warp-lang", marker = "sys_platform != 'darwin'", specifier = ">=1.12.0", index = "https://pypi.nvidia.com/" },
-    { name = "warp-lang", marker = "sys_platform == 'darwin'", specifier = ">=1.12.0" },
+    { name = "warp-lang", marker = "sys_platform != 'darwin'", specifier = ">=1.14.0", index = "https://pypi.nvidia.com/" },
+    { name = "warp-lang", marker = "sys_platform == 'darwin'", specifier = ">=1.14.0" },
 ]
 provides-extras = ["cu128", "cpu"]
 
@@ -1059,8 +1059,8 @@ docs = [
 
 [[package]]
 name = "mjviser"
-version = "0.0.13"
-source = { git = "https://github.com/mujocolab/mjviser?rev=1bdfd6fe79066b847a5f430000fcfbb53ec31a6f#1bdfd6fe79066b847a5f430000fcfbb53ec31a6f" }
+version = "0.0.14"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mujoco", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -1068,6 +1068,10 @@ dependencies = [
     { name = "pillow", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "trimesh", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "viser", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1d/e4/eef89b279fb1811b5f120a99ac9284c32ff2ca4fad5e6f5c93035f72ba9a/mjviser-0.0.14.tar.gz", hash = "sha256:ebde2203dab89959a13ae549b4d3e5e5cf9eb69de11a1a2fd759cbe8f8c641f3", size = 29576, upload-time = "2026-05-07T03:35:13.128Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/c2/4534d678ad1b3f7dee6fd83110112800287be21ba007d988abb9ddc8e0ac/mjviser-0.0.14-py3-none-any.whl", hash = "sha256:4b09f8e90506fc4a71d76fc628872147157947e9292428213ab78cfe137c9a26", size = 32296, upload-time = "2026-05-07T03:35:14.252Z" },
 ]
 
 [[package]]
@@ -1146,8 +1150,8 @@ wheels = [
 
 [[package]]
 name = "mujoco-warp"
-version = "3.8.0.2"
-source = { git = "https://github.com/google-deepmind/mujoco_warp?rev=88b55fc2696960b927bc12584994bb8412b36558#88b55fc2696960b927bc12584994bb8412b36558" }
+version = "3.9.0.1"
+source = { git = "https://github.com/google-deepmind/mujoco_warp?rev=e65a72e49a978a3051e7942bc5591df355ba0b5c#e65a72e49a978a3051e7942bc5591df355ba0b5c" }
 dependencies = [
     { name = "absl-py", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "etils", extra = ["epath"], marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -2031,7 +2035,7 @@ wheels = [
 
 [[package]]
 name = "rsl-rl-lib"
-version = "5.2.0"
+version = "5.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gitpython", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -2039,13 +2043,14 @@ dependencies = [
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "onnx", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "onnxscript", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "tensorboard", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "tensordict", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "torch", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "torchvision", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d7/a8/fb9aae0573a83dd510e228085f5e6ff9076a91f2bff6699270f07d31854c/rsl_rl_lib-5.2.0.tar.gz", hash = "sha256:cbb4eee96af9574495208381115d45d68ad1c0403710a2bc6512a2ee5bf57124", size = 60558, upload-time = "2026-04-23T12:40:54.259Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/51/2d4c95b3642c0f659fbcddcd17fa0401903733250fa382f51f9b913bb85f/rsl_rl_lib-5.4.0.tar.gz", hash = "sha256:e1aa5cd5771f2d9a9e7a7ba5456b942ab588410cfd397b3c63e32d00a0744f0d", size = 65902, upload-time = "2026-05-27T10:42:39.656Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/3a/3e8f39049cc5a8994bfdb2dd09d727f90a2781b9755adf59e49fa509500e/rsl_rl_lib-5.2.0-py3-none-any.whl", hash = "sha256:fc767059f329a184527dd10766c3382354f6deca4b049f23febc8140c3dc6029", size = 86451, upload-time = "2026-04-23T12:40:52.762Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/dd/6797be77ce0cc12881f29cd9363b791f15276fde6a136a73443b6b6c2ce3/rsl_rl_lib-5.4.0-py3-none-any.whl", hash = "sha256:b30a0e59dac0ef7236f8f793c9bedfa8f2b8f8d29c2965140feeb1439153ebab", size = 92871, upload-time = "2026-05-27T10:42:38.415Z" },
 ]
 
 [[package]]
