@@ -39,73 +39,29 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTOR_AGREEMENT.md](CONTRIBUTO
 
 ## Installation
 
-- Recommended Python range: `3.10` to `3.13` (`requires-python = ">=3.10,<3.14"`).
-- Current runtime matrix locked by `pyproject.toml` / `uv.lock`:
-  - `mjlab==1.4.0`, resolved from the editable sibling checkout at `../mjlab` when using `uv`.
-  - `mujoco==3.10.0.dev925204136`, resolved from the MuJoCo nightly index through the `uv` override.
-  - `mujoco-warp==3.9.0.1`, sourced from `google-deepmind/mujoco_warp` commit `e65a72e49a978a3051e7942bc5591df355ba0b5c`.
-  - `warp-lang==1.14.0`.
-  - `mjviser==0.0.14` and `rsl-rl-lib==5.4.0` via the current `mjlab` dependency set.
-- Other non-release sources in the resolved environment:
-  - `instinct_rl` is sourced from Git, currently locked to commit `3a2844890387eda6d93a4465cdef9e767aba8546`.
-
-### Workspace install with `uv` (recommended)
-
-Use this path if you want the environment that matches the checked-in lock file. The `uv` source table points `mjlab` to `../mjlab`, so keep `mjlab`, `instinct_rl`, and `InstinctMJ` as sibling checkouts.
+From the `InstinctMJ` directory:
 
 ```bash
-mkdir -p <workspace_dir>
-cd <workspace_dir>
-
-git clone https://github.com/mujocolab/mjlab.git
-git clone https://github.com/project-instinct/instinct_rl.git
-git clone https://github.com/project-instinct/InstinctMJ.git
-
-cd InstinctMJ
 uv sync
+uv run instinct-list-envs
 ```
 
-### Editable multi-repo workspace (optional)
+That is the normal install path. `uv sync` installs `InstinctMJ`, resolves the locked MuJoCo / MuJoCo Warp stack, and pulls `instinct_rl` from the Git source recorded in `uv.lock`.
 
-Use this path if you want to explicitly reinstall the sibling checkouts into the `InstinctMJ` environment after `uv sync`.
+Prerequisites:
+
+- Python `3.10` to `3.13` (`requires-python = ">=3.10,<3.14"`).
+- Linux x86_64 or macOS arm64.
+- `mjlab` must be next to this directory as `../mjlab`, because `pyproject.toml` installs it editable from that path.
+
+After installation, run training and playback with the `instinct_rl`-style commands:
 
 ```bash
-mkdir -p <workspace_dir>
-cd <workspace_dir>
-
-# Option 1: HTTPS
-git clone https://github.com/mujocolab/mjlab.git
-git clone https://github.com/project-instinct/instinct_rl.git
-git clone https://github.com/project-instinct/InstinctMJ.git
-cd InstinctMJ
-uv sync
-uv pip install --python .venv/bin/python --no-deps -e ../mjlab -e ../instinct_rl
-
-# Option 2: SSH
-# git clone git@github.com:mujocolab/mjlab.git
-# git clone git@github.com:project-instinct/instinct_rl.git
-# git clone git@github.com:project-instinct/InstinctMJ.git
+uv run instinct-train Instinct-Locomotion-Flat-G1-v0
+uv run instinct-play Instinct-Locomotion-Flat-G1-Play-v0 --load-run <run_name>
 ```
 
-If you skip the final editable reinstall, `uv` still uses the editable `../mjlab` source recorded in `pyproject.toml` / `uv.lock`; only `instinct_rl` remains pinned to the Git commit in the lock file.
-
-### `pip` alternative
-
-If you prefer `pip`, keep the same top-level sources explicitly:
-
-```bash
-pip install "mujoco~=3.8.0" "warp-lang>=1.14.0" "mjlab==1.4.0"
-pip install "mujoco-warp @ git+https://github.com/google-deepmind/mujoco_warp.git@e65a72e49a978a3051e7942bc5591df355ba0b5c"
-pip install -e "git+https://github.com/project-instinct/instinct_rl.git@3a2844890387eda6d93a4465cdef9e767aba8546#egg=instinct_rl"
-pip install -e .
-```
-
-- After installation, you can run the training workflow directly with `instinct_rl`-style commands:
-
-  ```bash
-  instinct-train Instinct-Locomotion-Flat-G1-v0
-  instinct-play Instinct-Locomotion-Flat-G1-Play-v0 --load-run <run_name>
-  ```
+If the virtual environment is active, the console scripts also work without `uv run`.
 
 ## Set up IDE (Optional)
 
@@ -133,6 +89,8 @@ Registered task IDs:
 - `Instinct-Shadowing-WholeBody-Plane-G1-Play-v0`
 - `Instinct-Perceptive-Shadowing-G1-v0`
 - `Instinct-Perceptive-Shadowing-G1-Play-v0`
+- `Instinct-Perceptive-Shadowing-G1-OneMotion-v0`
+- `Instinct-Perceptive-Shadowing-G1-OneMotion-Play-v0`
 - `Instinct-Perceptive-HOI-Shadowing-G1-v0`
 - `Instinct-Perceptive-HOI-Shadowing-G1-Play-v0`
 - `Instinct-Perceptive-Vae-G1-v0`
@@ -143,8 +101,8 @@ Registered task IDs:
 Use the CLI to inspect the full list at any time:
 
 ```bash
-instinct-list-envs
-instinct-list-envs shadowing
+uv run instinct-list-envs
+uv run instinct-list-envs shadowing
 ```
 
 ## Quick Start
@@ -152,21 +110,21 @@ instinct-list-envs shadowing
 Train:
 
 ```bash
-instinct-train Instinct-Locomotion-Flat-G1-v0
-instinct-train Instinct-Perceptive-Shadowing-G1-v0
+uv run instinct-train Instinct-Locomotion-Flat-G1-v0
+uv run instinct-train Instinct-Perceptive-Shadowing-G1-v0
 ```
 
 Play (`--load-run` is required):
 
 ```bash
-instinct-play Instinct-Locomotion-Flat-G1-Play-v0 --load-run <run_name>
-instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --load-run <run_name>
+uv run instinct-play Instinct-Locomotion-Flat-G1-Play-v0 --load-run <run_name>
+uv run instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --load-run <run_name>
 ```
 
 Play perceptive shadowing with released weights:
 
 ```bash
-instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 \
+uv run instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 \
   --load-run <downloaded_run_dir> \
   --checkpoint-file <checkpoint_file>
 ```
@@ -178,13 +136,13 @@ Pretrained weights:
 Export ONNX for parkour:
 
 ```bash
-instinct-play Instinct-Parkour-Target-Amp-G1-Play-v0 --load-run <run_name> --export-onnx
+uv run instinct-play Instinct-Parkour-Target-Amp-G1-Play-v0 --load-run <run_name> --export-onnx
 ```
 
 Play parkour with released weights:
 
 ```bash
-instinct-play Instinct-Parkour-Target-Amp-G1-Play-v0 \
+uv run instinct-play Instinct-Parkour-Target-Amp-G1-Play-v0 \
   --load-run <downloaded_run_dir> \
   --checkpoint-file <checkpoint_file>
 ```
@@ -207,9 +165,9 @@ If your filtered motion list is stored elsewhere, also update
 Module form is also available when console scripts are not on `PATH`:
 
 ```bash
-python -m instinct_mj.scripts.instinct_rl.train Instinct-Locomotion-Flat-G1-v0
-python -m instinct_mj.scripts.instinct_rl.play Instinct-Locomotion-Flat-G1-Play-v0 --load-run <run_name>
-python -m instinct_mj.scripts.list_envs
+uv run python -m instinct_mj.scripts.instinct_rl.train Instinct-Locomotion-Flat-G1-v0
+uv run python -m instinct_mj.scripts.instinct_rl.play Instinct-Locomotion-Flat-G1-Play-v0 --load-run <run_name>
+uv run python -m instinct_mj.scripts.list_envs
 ```
 
 ## Code Formatting
@@ -231,7 +189,7 @@ pre-commit run --all-files
 Or use the local helper command:
 
 ```bash
-instinct-format
+uv run instinct-format
 ```
 
 To enable hooks on every commit:
