@@ -7,7 +7,6 @@ from mjlab.managers import SceneEntityCfg
 from mjlab.sensor import ContactSensor, RayCastSensor
 from mjlab.utils.lab_api.math import quat_apply_inverse
 
-from instinct_mj.envs.mdp.rewards.regularizations import _unwrap_base_actuator
 from instinct_mj.envs.mdp.rewards.regularizations import (
     applied_torque_limits_by_ratio as _applied_torque_limits_by_ratio_general,
 )
@@ -286,32 +285,6 @@ def motors_power_square(
         normalize_by_stiffness=normalize_by_stiffness,
         normalize_by_num_joints=normalize_by_num_joints,
     )
-
-
-def joint_vel_limits(
-    env: ManagerBasedRlEnv,
-    soft_ratio: float,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """Penalize joint velocities if they cross soft limits.
-
-    Per-joint velocity limits are read from actuator cfg metadata
-    (``velocity_limit``). Excess is clipped to [0, 1] rad/s per joint.
-    """
-    asset: Entity = env.scene[asset_cfg.name]
-
-    joint_vel_limits = torch.zeros_like(asset.data.joint_vel)
-    for actuator in asset.actuators:
-        base_actuator = _unwrap_base_actuator(actuator)
-        target_ids = base_actuator.target_ids
-        joint_vel_limits[:, target_ids] = float(base_actuator.cfg.velocity_limit)
-
-    out_of_limits = (
-        torch.abs(asset.data.joint_vel[:, asset_cfg.joint_ids]) - joint_vel_limits[:, asset_cfg.joint_ids] * soft_ratio
-    )
-    # Clip to max error = 1 rad/s per joint to avoid huge penalties
-    out_of_limits = out_of_limits.clip_(min=0.0, max=1.0)
-    return torch.sum(out_of_limits, dim=1)
 
 
 def applied_torque_limits_by_ratio(

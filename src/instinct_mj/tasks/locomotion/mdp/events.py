@@ -52,11 +52,6 @@ def reset_joints_by_scale(
 
     joint_vel = asset.data.default_joint_vel[env_ids][:, asset_cfg.joint_ids].clone()
     joint_vel *= sample_uniform(*velocity_range, joint_vel.shape, env.device)
-    joint_vel_limits = torch.full_like(asset.data.joint_vel, float("inf"))
-    for actuator in asset.actuators:
-        joint_vel_limits[:, actuator.target_ids] = float(actuator.cfg.velocity_limit)
-    joint_vel_limits = joint_vel_limits[env_ids][:, asset_cfg.joint_ids]
-    joint_vel = joint_vel.clamp_(-joint_vel_limits, joint_vel_limits)
 
     joint_ids = asset_cfg.joint_ids
     if isinstance(joint_ids, list):

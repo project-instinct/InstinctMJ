@@ -755,14 +755,6 @@ def instinct_g1_parkour_amp_env_cfg(
             weight=-1.0,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=(".*",))},
         ),
-        "dof_vel_limits": RewardTermCfg(
-            func=parkour_mdp.joint_vel_limits,
-            weight=-1.0,
-            params={
-                "soft_ratio": 0.9,
-                "asset_cfg": SceneEntityCfg("robot", joint_names=(".*",)),
-            },
-        ),
         "torque_limits": RewardTermCfg(
             func=parkour_mdp.applied_torque_limits_by_ratio,
             weight=-0.01,

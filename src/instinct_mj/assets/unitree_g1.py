@@ -6,10 +6,8 @@ import copy
 import os
 
 import mujoco
-from mjlab.actuator import ActuatorCfg
+from mjlab.actuator import ActuatorCfg, BuiltinPdActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
-
-from instinct_mj.actuators import DelayedInstinctActuatorCfg, InstinctActuatorCfg
 
 __file_dir__ = os.path.dirname(os.path.realpath(__file__))
 
@@ -139,57 +137,52 @@ DAMPING_7520_22 = 2.0 * DAMPING_RATIO * ARMATURE_7520_22 * NATURAL_FREQ
 DAMPING_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ
 
 
-G1_29DOF_TORSOBASE_DELAYED_LEGS = DelayedInstinctActuatorCfg(
+G1_29DOF_TORSOBASE_DELAYED_LEGS = BuiltinPdActuatorCfg(
     target_names_expr=(".*_hip_yaw_joint", ".*_hip_roll_joint", ".*_hip_pitch_joint"),
     effort_limit=88.0,
-    velocity_limit=60.0,
     stiffness=90.0,
     damping=2.0,
     armature=0.03,
     delay_min_lag=0,
     delay_max_lag=1,
 )
-G1_29DOF_TORSOBASE_DELAYED_KNEES = DelayedInstinctActuatorCfg(
+G1_29DOF_TORSOBASE_DELAYED_KNEES = BuiltinPdActuatorCfg(
     target_names_expr=(".*_knee_joint",),
     effort_limit=139.0,
-    velocity_limit=60.0,
     stiffness=140.0,
     damping=2.5,
     armature=0.03,
     delay_min_lag=0,
     delay_max_lag=1,
 )
-G1_29DOF_TORSOBASE_DELAYED_WAIST = DelayedInstinctActuatorCfg(
+G1_29DOF_TORSOBASE_DELAYED_WAIST = BuiltinPdActuatorCfg(
     target_names_expr=("waist_roll_joint", "waist_pitch_joint"),
     effort_limit=50.0,
-    velocity_limit=60.0,
     stiffness=60.0,
     damping=2.5,
     armature=0.03,
     delay_min_lag=0,
     delay_max_lag=1,
 )
-G1_29DOF_TORSOBASE_DELAYED_WAIST_YAW = DelayedInstinctActuatorCfg(
+G1_29DOF_TORSOBASE_DELAYED_WAIST_YAW = BuiltinPdActuatorCfg(
     target_names_expr=("waist_yaw_joint",),
     effort_limit=88.0,
-    velocity_limit=60.0,
     stiffness=90.0,
     damping=2.5,
     armature=0.03,
     delay_min_lag=0,
     delay_max_lag=1,
 )
-G1_29DOF_TORSOBASE_DELAYED_FEET = DelayedInstinctActuatorCfg(
+G1_29DOF_TORSOBASE_DELAYED_FEET = BuiltinPdActuatorCfg(
     target_names_expr=(".*_ankle_pitch_joint", ".*_ankle_roll_joint"),
     effort_limit=20.0,
-    velocity_limit=60.0,
     stiffness=20.0,
     damping=1.0,
     armature=0.03,
     delay_min_lag=0,
     delay_max_lag=1,
 )
-G1_29DOF_TORSOBASE_DELAYED_ARMS = DelayedInstinctActuatorCfg(
+G1_29DOF_TORSOBASE_DELAYED_ARMS = BuiltinPdActuatorCfg(
     target_names_expr=(
         ".*_shoulder_pitch_joint",
         ".*_shoulder_roll_joint",
@@ -197,27 +190,24 @@ G1_29DOF_TORSOBASE_DELAYED_ARMS = DelayedInstinctActuatorCfg(
         ".*_elbow_joint",
     ),
     effort_limit=25.0,
-    velocity_limit=60.0,
     stiffness=25.0,
     damping=1.0,
     armature=0.03,
     delay_min_lag=0,
     delay_max_lag=1,
 )
-G1_29DOF_TORSOBASE_DELAYED_WRIST_ROLL = DelayedInstinctActuatorCfg(
+G1_29DOF_TORSOBASE_DELAYED_WRIST_ROLL = BuiltinPdActuatorCfg(
     target_names_expr=(".*wrist_roll_joint",),
     effort_limit=25.0,
-    velocity_limit=25.0,
     stiffness=25.0,
     damping=1.0,
     armature=0.03,
     delay_min_lag=0,
     delay_max_lag=1,
 )
-G1_29DOF_TORSOBASE_DELAYED_WRIST_PITCH_YAW = DelayedInstinctActuatorCfg(
+G1_29DOF_TORSOBASE_DELAYED_WRIST_PITCH_YAW = BuiltinPdActuatorCfg(
     target_names_expr=(".*wrist_pitch_joint", ".*wrist_yaw_joint"),
     effort_limit=5.0,
-    velocity_limit=25.0,
     stiffness=5.0,
     damping=0.5,
     armature=0.03,
@@ -236,47 +226,42 @@ g1_29dof_torsobase_delayed_actuator_cfgs: tuple[ActuatorCfg, ...] = (
 )
 
 
-BEYONDMIMIC_G1_29DOF_LEGS_PITCH_YAW = InstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_LEGS_PITCH_YAW = BuiltinPdActuatorCfg(
     target_names_expr=(".*_hip_pitch_joint", ".*_hip_yaw_joint"),
     effort_limit=88.0,
-    velocity_limit=32.0,
     stiffness=STIFFNESS_7520_14,
     damping=DAMPING_7520_14,
     armature=ARMATURE_7520_14,
 )
-BEYONDMIMIC_G1_29DOF_WAIST_YAW = InstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_WAIST_YAW = BuiltinPdActuatorCfg(
     target_names_expr=("waist_yaw_joint",),
     effort_limit=88.0,
-    velocity_limit=32.0,
     stiffness=STIFFNESS_7520_14,
     damping=DAMPING_7520_14,
     armature=ARMATURE_7520_14,
 )
-BEYONDMIMIC_G1_29DOF_LEGS_ROLL_KNEE = InstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_LEGS_ROLL_KNEE = BuiltinPdActuatorCfg(
     target_names_expr=(".*_hip_roll_joint", ".*_knee_joint"),
     effort_limit=139.0,
-    velocity_limit=20.0,
     stiffness=STIFFNESS_7520_22,
     damping=DAMPING_7520_22,
     armature=ARMATURE_7520_22,
 )
-BEYONDMIMIC_G1_29DOF_FEET = InstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_FEET = BuiltinPdActuatorCfg(
     target_names_expr=(".*_ankle_pitch_joint", ".*_ankle_roll_joint"),
     effort_limit=50.0,
-    velocity_limit=37.0,
     stiffness=2.0 * STIFFNESS_5020,
     damping=2.0 * DAMPING_5020,
     armature=2.0 * ARMATURE_5020,
 )
-BEYONDMIMIC_G1_29DOF_WAIST = InstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_WAIST = BuiltinPdActuatorCfg(
     target_names_expr=("waist_roll_joint", "waist_pitch_joint"),
     effort_limit=50.0,
-    velocity_limit=37.0,
     stiffness=2.0 * STIFFNESS_5020,
     damping=2.0 * DAMPING_5020,
     armature=2.0 * ARMATURE_5020,
 )
-BEYONDMIMIC_G1_29DOF_ARMS_5020 = InstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_ARMS_5020 = BuiltinPdActuatorCfg(
     target_names_expr=(
         ".*_shoulder_pitch_joint",
         ".*_shoulder_roll_joint",
@@ -285,15 +270,13 @@ BEYONDMIMIC_G1_29DOF_ARMS_5020 = InstinctActuatorCfg(
         ".*_wrist_roll_joint",
     ),
     effort_limit=25.0,
-    velocity_limit=37.0,
     stiffness=STIFFNESS_5020,
     damping=DAMPING_5020,
     armature=ARMATURE_5020,
 )
-BEYONDMIMIC_G1_29DOF_ARMS_4010 = InstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_ARMS_4010 = BuiltinPdActuatorCfg(
     target_names_expr=(".*_wrist_pitch_joint", ".*_wrist_yaw_joint"),
     effort_limit=5.0,
-    velocity_limit=22.0,
     stiffness=STIFFNESS_4010,
     damping=DAMPING_4010,
     armature=ARMATURE_4010,
@@ -309,57 +292,52 @@ beyondmimic_g1_29dof_actuator_cfgs: tuple[ActuatorCfg, ...] = (
 )
 
 
-BEYONDMIMIC_G1_29DOF_DELAYED_LEGS_PITCH_YAW = DelayedInstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_DELAYED_LEGS_PITCH_YAW = BuiltinPdActuatorCfg(
     target_names_expr=(".*_hip_pitch_joint", ".*_hip_yaw_joint"),
     effort_limit=88.0,
-    velocity_limit=32.0,
     stiffness=STIFFNESS_7520_14,
     damping=DAMPING_7520_14,
     armature=ARMATURE_7520_14,
     delay_min_lag=0,
     delay_max_lag=2,
 )
-BEYONDMIMIC_G1_29DOF_DELAYED_WAIST_YAW = DelayedInstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_DELAYED_WAIST_YAW = BuiltinPdActuatorCfg(
     target_names_expr=("waist_yaw_joint",),
     effort_limit=88.0,
-    velocity_limit=32.0,
     stiffness=STIFFNESS_7520_14,
     damping=DAMPING_7520_14,
     armature=ARMATURE_7520_14,
     delay_min_lag=0,
     delay_max_lag=2,
 )
-BEYONDMIMIC_G1_29DOF_DELAYED_LEGS_ROLL_KNEE = DelayedInstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_DELAYED_LEGS_ROLL_KNEE = BuiltinPdActuatorCfg(
     target_names_expr=(".*_hip_roll_joint", ".*_knee_joint"),
     effort_limit=139.0,
-    velocity_limit=20.0,
     stiffness=STIFFNESS_7520_22,
     damping=DAMPING_7520_22,
     armature=ARMATURE_7520_22,
     delay_min_lag=0,
     delay_max_lag=2,
 )
-BEYONDMIMIC_G1_29DOF_DELAYED_FEET = DelayedInstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_DELAYED_FEET = BuiltinPdActuatorCfg(
     target_names_expr=(".*_ankle_pitch_joint", ".*_ankle_roll_joint"),
     effort_limit=50.0,
-    velocity_limit=37.0,
     stiffness=2.0 * STIFFNESS_5020,
     damping=2.0 * DAMPING_5020,
     armature=2.0 * ARMATURE_5020,
     delay_min_lag=0,
     delay_max_lag=2,
 )
-BEYONDMIMIC_G1_29DOF_DELAYED_WAIST = DelayedInstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_DELAYED_WAIST = BuiltinPdActuatorCfg(
     target_names_expr=("waist_roll_joint", "waist_pitch_joint"),
     effort_limit=50.0,
-    velocity_limit=37.0,
     stiffness=2.0 * STIFFNESS_5020,
     damping=2.0 * DAMPING_5020,
     armature=2.0 * ARMATURE_5020,
     delay_min_lag=0,
     delay_max_lag=2,
 )
-BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_5020 = DelayedInstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_5020 = BuiltinPdActuatorCfg(
     target_names_expr=(
         ".*_shoulder_pitch_joint",
         ".*_shoulder_roll_joint",
@@ -368,17 +346,15 @@ BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_5020 = DelayedInstinctActuatorCfg(
         ".*_wrist_roll_joint",
     ),
     effort_limit=25.0,
-    velocity_limit=37.0,
     stiffness=STIFFNESS_5020,
     damping=DAMPING_5020,
     armature=ARMATURE_5020,
     delay_min_lag=0,
     delay_max_lag=2,
 )
-BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_4010 = DelayedInstinctActuatorCfg(
+BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_4010 = BuiltinPdActuatorCfg(
     target_names_expr=(".*_wrist_pitch_joint", ".*_wrist_yaw_joint"),
     effort_limit=5.0,
-    velocity_limit=22.0,
     stiffness=STIFFNESS_4010,
     damping=DAMPING_4010,
     armature=ARMATURE_4010,
