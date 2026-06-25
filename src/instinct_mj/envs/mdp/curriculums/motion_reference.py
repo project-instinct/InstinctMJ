@@ -26,6 +26,7 @@ class BeyondMimicAdaptiveWeighting(ManagerTermBase):
     def __init__(self, cfg: CurriculumTermCfg, env: ManagerBasedRlEnv):
         super().__init__(env)
         self._cfg = cfg
+        self.enabled = True
 
         # A note of needed parameters
         self.adaptive_uniform_ratio = cfg.params.get("adaptive_uniform_ratio", 0.1)
@@ -40,6 +41,14 @@ class BeyondMimicAdaptiveWeighting(ManagerTermBase):
         self.motion_buffer_name = list(self.motion_reference.motion_buffers.keys())[0]
         self.motion_buffer: AmassMotion = self.motion_reference.motion_buffers[self.motion_buffer_name]  # type: ignore
         self.__motion_bin_length_s = self.motion_buffer.cfg.motion_bin_length_s
+
+        if self.__motion_bin_length_s is None or not hasattr(self.motion_buffer, "_motion_bin_weights"):
+            self.enabled = False
+            self.motion_bin_nums = None
+            self.motion_bin_fail_counter = None
+            self.current_motion_bin_fail_counter = None
+            self.kernel = None
+            return
 
         self.motion_bin_nums = self.motion_buffer._motion_bin_weights._batch_sizes
         self.motion_bin_fail_counter = ConcatBatchTensor(
@@ -74,6 +83,9 @@ class BeyondMimicAdaptiveWeighting(ManagerTermBase):
         adaptive_alpha: float = 0.001,
         adaptive_lambda: float = 0.8,
     ) -> dict[str, float] | None:
+        if not self.enabled:
+            return None
+
         if len(env_ids) == 0:
             raise ValueError("No env_ids")
 
@@ -204,6 +216,9 @@ class BeyondConcatMotionAdaptiveWeighting(BeyondMimicAdaptiveWeighting):
         adaptive_alpha: float = 0.001,
         adaptive_lambda: float = 0.8,
     ) -> dict[str, float] | None:
+        if not self.enabled:
+            return None
+
         self._update_current_motion_bin_fail_counter(env_ids)
 
         # Compute the new motion bin probability

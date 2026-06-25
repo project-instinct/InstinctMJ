@@ -401,6 +401,16 @@ class AmassMotion(MotionBuffer):
             self._get_motion_based_origin(env_origins, env_ids).unsqueeze(1).unsqueeze(1)
         )  # avoiding inplace operation
 
+        # AMASS provides all joints/links, so all masks are valid
+        data_buffer.joint_pos_mask[env_ids] = True
+        data_buffer.joint_vel_mask[env_ids] = True
+        data_buffer.base_pos_plane_mask[env_ids] = True
+        data_buffer.base_pos_height_mask[env_ids] = True
+        data_buffer.base_orientation_mask[env_ids] = True
+        data_buffer.base_heading_mask[env_ids] = True
+        data_buffer.link_pos_mask[env_ids] = True
+        data_buffer.link_rot_mask[env_ids] = True
+
     def get_current_motion_identifiers(self, env_ids: Sequence[int] | torch.Tensor | None = None) -> list[str]:
         """Get the identifiers of the motion files for each env.
         Args:
