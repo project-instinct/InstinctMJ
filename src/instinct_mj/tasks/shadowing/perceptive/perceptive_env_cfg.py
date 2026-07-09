@@ -717,7 +717,7 @@ def make_events() -> dict[str, EventTermCfg]:
             },
         ),
         "randomize_rigid_body_mass": EventTermCfg(
-            func=mdp.dr.body_mass,
+            func=mdp.dr.pseudo_inertia,
             mode="startup",
             params={
                 "asset_cfg": SceneEntityCfg(
@@ -730,9 +730,8 @@ def make_events() -> dict[str, EventTermCfg]:
                         "right_wrist.*",
                     ],
                 ),
-                "ranges": (0.8, 1.2),
-                "operation": "scale",
-                "distribution": "uniform",
+                "alpha_range": (0.5 * math.log(0.8), 0.5 * math.log(1.2)),
+                "distribution": instinct_mdp.uniform_mass_scale_to_alpha,
             },
         ),
         "match_motion_ref_with_scene": EventTermCfg(
