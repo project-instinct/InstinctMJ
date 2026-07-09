@@ -30,6 +30,18 @@ _DR_ADD_CURRENT = dr.Operation(
     uses_defaults=False,
 )
 
+uniform_mass_scale_to_alpha = dr.Distribution(
+    name="uniform_mass_scale_to_alpha",
+    sample=lambda lo, hi, shape, device: 0.5 * torch.log(
+        math_utils.sample_uniform(
+            torch.exp(2.0 * lo),
+            torch.exp(2.0 * hi),
+            shape,
+            device=device,
+        )
+    ),
+)
+
 
 def _randomize_prop_by_op(
     data: torch.Tensor,
