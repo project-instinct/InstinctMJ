@@ -102,12 +102,7 @@ class InstinctRlOnPolicyRunnerCfg:
     max_iterations: int = 30_000
     policy: InstinctRlActorCriticCfg = field(default_factory=InstinctRlActorCriticCfg)
     algorithm: InstinctRlPpoAlgorithmCfg = field(default_factory=InstinctRlPpoAlgorithmCfg)
-    normalizers: dict[str, InstinctRlNormalizerCfg] = field(
-        default_factory=lambda: {
-            "policy": InstinctRlNormalizerCfg(),
-            "critic": InstinctRlNormalizerCfg(),
-        }
-    )
+    normalizers: dict[str, InstinctRlNormalizerCfg] = field(default_factory=dict)
     save_interval: int = 500
     log_interval: int = 1
     experiment_name: str = "instinct_mj"
