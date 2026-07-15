@@ -480,6 +480,8 @@ def launch_training(task_id: str, args: TrainConfig | None = None) -> None:
     args = args or TrainConfig.from_task(task_id)
     log_root_path = Path("logs") / "instinct_rl" / args.agent.experiment_name
     log_dir_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if args.env.run_name:
+        log_dir_name += f"_{args.env.run_name}"
     if args.agent.run_name:
         log_dir_name += f"_{args.agent.run_name}"
     log_dir = log_root_path / log_dir_name

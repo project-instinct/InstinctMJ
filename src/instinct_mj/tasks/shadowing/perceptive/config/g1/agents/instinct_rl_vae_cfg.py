@@ -41,7 +41,7 @@ class Conv2dHeadEncoderCfg:
 
         takeout_input_components: bool = True
 
-    depth_image: object = field(default_factory=lambda: DepthImageEncoderCfg())
+    depth_image: object = field(default_factory=DepthImageEncoderCfg)
 
 
 @dataclass(kw_only=True)
@@ -61,6 +61,12 @@ class PolicyCfg(InstinctRlEncoderActorCriticCfg):
 
 @dataclass(kw_only=True)
 class VaePolicyCfg(InstinctRlEncoderVaeActorCriticCfg):
+    init_noise_std: float = 1e-4
+
+    critic_hidden_dims: list = field(default_factory=lambda: [512, 256, 128])
+
+    activation: str = "elu"
+
     encoder_configs: object = field(default_factory=lambda: Conv2dHeadEncoderCfg())
 
     vae_encoder_kwargs: dict = field(
@@ -221,7 +227,6 @@ class G1PerceptiveVaePPORunnerCfg(InstinctRlOnPolicyRunnerCfg):
     load_run: object | None = None
 
     def __post_init__(self):
-        super().__post_init__()
         self.resume = self.load_run is not None
         self.run_name = "".join(
             [

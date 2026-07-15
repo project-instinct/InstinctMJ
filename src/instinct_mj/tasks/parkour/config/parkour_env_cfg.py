@@ -273,6 +273,8 @@ ROUGH_TERRAINS_CFG = FiledTerrainGeneratorCfg(
 )
 
 ROUGH_TERRAINS_CFG_PLAY = copy.deepcopy(ROUGH_TERRAINS_CFG)
+for sub_terrain_cfg in ROUGH_TERRAINS_CFG_PLAY.sub_terrains.values():
+    sub_terrain_cfg.wall_prob = [0.0, 0.0, 0.0, 0.0]
 ROUGH_TERRAINS_CFG_PLAY.num_rows = 4
 ROUGH_TERRAINS_CFG_PLAY.num_cols = 10
 
