@@ -124,6 +124,12 @@ class MotionMatchedTerrainCfg(SubTerrainBaseCfg):
 
     """
 
+    crop_to_size: bool = True
+    """Whether to crop the source terrain mesh to ``cfg.size`` before importing it."""
+
+    use_input_origin_frame: bool = False
+    """Whether to preserve the input terrain/motion z-frame instead of estimating border height."""
+
     collision_hfield: bool = False
     """If True, use a derived MuJoCo hfield for collision while keeping mesh for rendering.
 

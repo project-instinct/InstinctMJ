@@ -12,8 +12,6 @@ from prettytable import PrettyTable
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
 
-    from .manager_term_cfg import MultiRewardCfg
-
 
 class MultiRewardManager(RewardManager):
     """Manager to computing multiple groups of reward signals for a given world.
@@ -25,11 +23,17 @@ class MultiRewardManager(RewardManager):
     be in shape (num_envs, num_groups) where each column corresponds to the total reward.
     """
 
-    def __init__(self, cfg: MultiRewardCfg, env: ManagerBasedRlEnv, *, scale_by_dt: bool = True):
+    def __init__(
+        self,
+        cfg: dict[str, dict[str, RewardTermCfg | str | None]],
+        env: ManagerBasedRlEnv,
+        *,
+        scale_by_dt: bool = True,
+    ):
         """Initialize the reward manager.
 
         Args:
-            cfg: The configuration object or dictionary (``dict[str, RewardTermCfg]``).
+            cfg: Reward groups as ``dict[str, dict[str, RewardTermCfg]]``.
             env: The environment instance.
             scale_by_dt: Whether to scale the reward by the environment step dt.
         """
@@ -123,12 +127,13 @@ class MultiRewardManager(RewardManager):
         Returns:
             A dict or reward signal with shape (num_envs,) for each reward group.
         """
+        scale = dt if self._scale_by_dt else 1.0
         for group_name in self.__group_term_cfgs.keys():
             term_combine_method = self.__group_term_combine_methods.get(group_name, "sum")
             if term_combine_method == "sum":
                 self._reward_buf[group_name][:] = 0.0
             elif term_combine_method == "prod":
-                self._reward_buf[group_name][:] = dt
+                self._reward_buf[group_name][:] = scale
             else:
                 raise ValueError(f"Invalid term combine method: {term_combine_method}")
         # iterate over all the reward groups and terms
@@ -142,7 +147,7 @@ class MultiRewardManager(RewardManager):
                 value = term_cfg.func(self._env, **term_cfg.params) * term_cfg.weight
                 # update the reward buffer
                 if term_combine_method == "sum":
-                    self._reward_buf[group_name] += value * dt
+                    self._reward_buf[group_name] += value * scale
                 elif term_combine_method == "prod":
                     self._reward_buf[group_name] *= value
                 else:
@@ -150,7 +155,7 @@ class MultiRewardManager(RewardManager):
                 # update the termwise reward buffer
                 self._termwise_reward_buf[group_name][term_name] = value  # (num_envs,)
                 # update the episodic sum
-                self._episode_sums["_".join([group_name, term_name])] += value * dt
+                self._episode_sums["_".join([group_name, term_name])] += value * scale
         # return the reward buffer
         return self._reward_buf
 
@@ -198,22 +203,12 @@ class MultiRewardManager(RewardManager):
         self.__group_class_term_cfgs: dict[str, list[RewardTermCfg]] = dict()
         self.__group_term_combine_methods: dict[str, str] = dict()
 
-        # check if config is dict already
-        if isinstance(self.cfg, dict):
-            groups_cfg_items = self.cfg.items()
-        else:
-            groups_cfg_items = self.cfg.__dict__.items()
-        for group_name, group_cfg in groups_cfg_items:
+        for group_name, group_cfg in self.cfg.items():
             # check for non config
             if group_cfg is None:
                 continue
-            # check if config is dict already
-            if isinstance(group_cfg, dict):
-                group_cfg_items = group_cfg.items()
-            else:
-                group_cfg_items = group_cfg.__dict__.items()
             # iterate over all the terms
-            for term_name, term_cfg in group_cfg_items:
+            for term_name, term_cfg in group_cfg.items():
                 # check for non config
                 if term_cfg is None:
                     continue

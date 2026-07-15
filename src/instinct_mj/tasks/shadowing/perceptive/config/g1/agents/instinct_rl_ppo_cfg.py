@@ -40,7 +40,7 @@ class Conv2dHeadEncoderCfg:
 
         takeout_input_components: bool = True
 
-    depth_image: object = field(default_factory=lambda: DepthImageEncoderCfg())
+    depth_image: object = field(default_factory=DepthImageEncoderCfg)
 
 
 @dataclass(kw_only=True)
@@ -115,7 +115,6 @@ class G1PerceptiveShadowingPPORunnerCfg(InstinctRlOnPolicyRunnerCfg):
     load_run: object | None = None
 
     def __post_init__(self):
-        super().__post_init__()
         self.resume = self.load_run is not None
         self.run_name = "".join(
             [

@@ -1,7 +1,7 @@
 """G1 parkour AMP task config factories.
 
 Config is built via factory functions that return a fully-built
-``ManagerBasedRlEnvCfg``.
+``G1ParkourAmpEnvCfg``.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import os
 from dataclasses import dataclass, field
 
 import mujoco
-from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers import (
     CurriculumTermCfg,
@@ -31,6 +30,7 @@ from mjlab.sensor import (
     PinholeCameraPatternCfg,
     RayCastSensorCfg,
 )
+from mjlab.scene import SceneCfg
 from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
 from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.viewer.viewer_config import ViewerConfig
@@ -44,6 +44,7 @@ from instinct_mj.assets.unitree_g1 import (
     beyondmimic_action_scale,
     beyondmimic_g1_29dof_delayed_actuator_cfgs,
 )
+from instinct_mj.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
 from instinct_mj.motion_reference.motion_files.amass_motion_cfg import AmassMotionCfg as AmassMotionCfgBase
 from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
@@ -65,7 +66,6 @@ __file_dir__ = os.path.dirname(os.path.realpath(__file__))
 # Example:
 # _PARKOUR_DATASET_DIR = os.path.expanduser("~/your/path/to/parkour_motion_reference")
 _PARKOUR_DATASET_DIR = os.path.expanduser("~/Xyk/Datasets/data&model/parkour_motion_reference")
-
 
 # ---------------------------------------------------------------------------
 # Motion reference configs
@@ -145,11 +145,36 @@ def _parkour_g1_with_shoe_spec() -> mujoco.MjSpec:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(kw_only=True)
+class G1ParkourSceneCfg(SceneCfg):
+    """Scene configuration for the G1 Parkour task."""
+
+
+@dataclass(kw_only=True)
+class G1ParkourAmpEnvCfg(InstinctLabRLEnvCfg):
+    """Dictionary-manager environment configuration for G1 Parkour AMP."""
+
+    scene: G1ParkourSceneCfg = field(default_factory=G1ParkourSceneCfg)
+    decimation: int = 4
+    observations: dict = field(default_factory=dict)
+    actions: dict = field(default_factory=dict)
+    rewards: dict = field(default_factory=lambda: {"rewards": {}})
+    terminations: dict = field(default_factory=dict)
+    commands: dict = field(default_factory=dict)
+    events: dict = field(default_factory=dict)
+    curriculum: dict = field(default_factory=dict)
+    monitors: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # All managers are already dicts, no conversion needed!
+        pass
+
+
 def instinct_g1_parkour_amp_env_cfg(
     *,
     play: bool = False,
     shoe: bool = True,
-) -> ManagerBasedRlEnvCfg:
+) -> G1ParkourAmpEnvCfg:
     """Build the base G1 parkour AMP environment configuration.
 
     Args:
@@ -158,10 +183,39 @@ def instinct_g1_parkour_amp_env_cfg(
       shoe: If True, apply shoe-specific adjustments (default is True).
 
     Returns:
-      A ``ManagerBasedRlEnvCfg`` instance with parkour settings applied.
+      A ``G1ParkourAmpEnvCfg`` instance with parkour settings applied.
     """
-    cfg = unitree_g1_flat_tracking_env_cfg(play=play, has_state_estimation=True)
-    cfg.monitors = {}
+    tracking_cfg = unitree_g1_flat_tracking_env_cfg(play=play, has_state_estimation=True)
+    tracking_scene = tracking_cfg.scene
+    cfg = G1ParkourAmpEnvCfg(
+        decimation=tracking_cfg.decimation,
+        scene=G1ParkourSceneCfg(
+            num_envs=tracking_scene.num_envs,
+            env_spacing=tracking_scene.env_spacing,
+            terrain=tracking_scene.terrain,
+            entities=tracking_scene.entities,
+            sensors=tracking_scene.sensors,
+            extent=tracking_scene.extent,
+            spec_fn=tracking_scene.spec_fn,
+        ),
+        observations=tracking_cfg.observations,
+        actions=tracking_cfg.actions,
+        events=tracking_cfg.events,
+        seed=tracking_cfg.seed,
+        sim=tracking_cfg.sim,
+        viewer=tracking_cfg.viewer,
+        episode_length_s=tracking_cfg.episode_length_s,
+        rewards={"rewards": tracking_cfg.rewards},
+        terminations=tracking_cfg.terminations,
+        commands=tracking_cfg.commands,
+        curriculum=tracking_cfg.curriculum,
+        metrics=tracking_cfg.metrics,
+        recorders=tracking_cfg.recorders,
+        is_finite_horizon=tracking_cfg.is_finite_horizon,
+        auto_reset=tracking_cfg.auto_reset,
+        scale_rewards_by_dt=tracking_cfg.scale_rewards_by_dt,
+        monitors={},
+    )
     cfg.viewer.origin_type = ViewerConfig.OriginType.WORLD
     cfg.viewer.entity_name = None
     cfg.viewer.body_name = None
@@ -598,7 +652,7 @@ def instinct_g1_parkour_amp_env_cfg(
         enable_corruption=False,
     )
 
-    cfg.rewards = {
+    cfg.rewards = {"rewards": {
         # ---------- Task rewards ----------
         "track_lin_vel_xy_exp": RewardTermCfg(
             func=parkour_mdp.track_lin_vel_xy_exp,
@@ -768,7 +822,7 @@ def instinct_g1_parkour_amp_env_cfg(
             weight=-1.0,
             params={"sensor_name": "undesired_contact_forces", "threshold": 1.0},
         ),
-    }
+    }}
     cfg.curriculum = {
         "terrain_levels": CurriculumTermCfg(
             func=parkour_mdp.tracking_exp_vel,
@@ -869,7 +923,7 @@ def instinct_g1_parkour_amp_env_cfg(
         leg_volume_points.points_generator.z_max = -0.023
 
         # Adjust feet_at_plane height offset for shoes
-        cfg.rewards["feet_at_plane"].params["height_offset"] = 0.058
+        cfg.rewards["rewards"]["feet_at_plane"].params["height_offset"] = 0.058
 
     if play:
         cfg.scene.num_envs = 10
@@ -907,7 +961,7 @@ def instinct_g1_parkour_amp_final_cfg(
     *,
     play: bool = False,
     shoe: bool = True,
-) -> ManagerBasedRlEnvCfg:
+) -> G1ParkourAmpEnvCfg:
     """Create the final G1 parkour AMP env configuration.
 
     Args:
@@ -917,7 +971,7 @@ def instinct_g1_parkour_amp_final_cfg(
         matching the original ``G1ParkourEnvCfg``).
 
     Returns:
-      A fully-built ``ManagerBasedRlEnvCfg`` instance.
+      A fully-built ``G1ParkourAmpEnvCfg`` instance.
     """
     # Build base parkour config (already includes play overrides if requested)
     cfg = instinct_g1_parkour_amp_env_cfg(play=play, shoe=shoe)

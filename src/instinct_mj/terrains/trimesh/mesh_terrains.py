@@ -118,6 +118,8 @@ def _coacd_cache_key(
         int(stat_info.st_mtime_ns),
         float(cfg.size[0]),
         float(cfg.size[1]),
+        bool(cfg.crop_to_size),
+        bool(cfg.use_input_origin_frame),
         float(cfg.collision_coacd_threshold),
         int(cfg.collision_coacd_max_convex_hull),
         str(cfg.collision_coacd_preprocess_mode),
@@ -203,24 +205,21 @@ def _compute_motion_matched_border_height(
     )
     border_verts_z = verts[border_mask][:, 2]
 
-    if len(border_verts_z) == 0:
-        # No vertices at cfg.size boundary — mesh is smaller than cfg.size.
-        # Fall back to 0.0, matching original InstinctLab behavior for these terrains.
-        # These STL meshes were recorded with the walkable floor at z≈0 by convention,
-        # so no z-shift is needed.  Using AABB edges as fallback is unsafe because for
-        # staircase/ramp terrains the AABB edges sample obstacle tops (z=0.6–0.7 m),
-        # which would incorrectly sink the entire tile by that amount.
-        border_height = 0.0
-        print(
-            f"[TerrainImporter] Terrain {terrain_file} has no border verts at cfg.size edges; "
-            "using border_height=0.0 (floor assumed at z≈0)."
-        )
-    else:
+    if len(border_verts_z) > 0:
         border_height = float(np.mean(border_verts_z))
-        if np.isnan(border_height):
-            # Unexpected — empty slice mean; treat as 0.
-            print(f"Warning: Terrain {terrain_file} does not have a valid border height. Using 0 as the border height.")
-            border_height = 0.0
+        if not np.isnan(border_height):
+            return border_height
+
+    # No vertices at cfg.size boundary — mesh may be smaller than cfg.size.
+    # These STL meshes are often recorded with the walkable floor at z≈0 by convention,
+    # but the current InstinctLab source uses a low-percentile estimate when input-frame
+    # preservation is disabled. Using AABB edges directly is unsafe because staircase/ramp
+    # edges may sample obstacle tops instead of the floor.
+    border_height = float(np.percentile(terrain_mesh.vertices[:, 2], 10.0))
+    print(
+        f"Warning: Terrain {terrain_file} does not have valid border vertices at cfg.size edges. "
+        f"Using z-percentile floor estimate {border_height:.4f} as border height."
+    )
     return border_height
 
 
@@ -228,29 +227,52 @@ def _load_motion_matched_terrain_mesh(
     terrain_abspath: str,
     terrain_file: str,
     size: tuple[float, float],
+    crop_to_size: bool,
+    use_input_origin_frame: bool,
 ) -> tuple[trimesh.Trimesh, float]:
     """Load, crop, and align one terrain mesh to generator convention."""
     terrain_mesh = trimesh.load(terrain_abspath, force="mesh")
+    border_height_reference_mesh = terrain_mesh
 
     # crop terrain mesh by cfg.size
     # This does not change the terrain origin.
-    terrain_mesh = crop_terrain_mesh_aabb(
-        terrain_mesh,
-        x_max=size[0] / 2,
-        x_min=-size[0] / 2,
-        y_max=size[1] / 2,
-        y_min=-size[1] / 2,
-    )
+    if crop_to_size:
+        terrain_mesh = crop_terrain_mesh_aabb(
+            terrain_mesh,
+            x_max=size[0] / 2,
+            x_min=-size[0] / 2,
+            y_max=size[1] / 2,
+            y_min=-size[1] / 2,
+        )
+        border_height_reference_mesh = terrain_mesh
+    else:
+        border_height_reference_mesh = crop_terrain_mesh_aabb(
+            terrain_mesh.copy(),
+            x_max=size[0] / 2,
+            x_min=-size[0] / 2,
+            y_max=size[1] / 2,
+            y_min=-size[1] / 2,
+        )
+        if len(border_height_reference_mesh.vertices) == 0:
+            print(
+                f"Warning: Terrain {terrain_file} has empty reference crop for border height estimation. "
+                "Falling back to the full mesh."
+            )
+            border_height_reference_mesh = terrain_mesh
+
     # Normalize mesh winding/normals before CoACD to reduce manifold-orientation artifacts.
     terrain_mesh.remove_unreferenced_vertices()
     trimesh.repair.fix_winding(terrain_mesh)
     trimesh.repair.fix_normals(terrain_mesh, multibody=True)
 
-    border_height = _compute_motion_matched_border_height(
-        terrain_mesh=terrain_mesh,
-        size=size,
-        terrain_file=terrain_file,
-    )
+    if use_input_origin_frame:
+        border_height = 0.0
+    else:
+        border_height = _compute_motion_matched_border_height(
+            terrain_mesh=border_height_reference_mesh,
+            size=size,
+            terrain_file=terrain_file,
+        )
 
     # To follow the terrain_generator convention, we move the terrain mesh to (size[0]/2, size[1]/2, -border_height).
     move_terrain_transform = np.eye(4)
@@ -414,14 +436,26 @@ def _run_coacd_decomposition(
 
 
 def _coacd_prewarm_worker(
-    job: tuple[str, str, tuple[float, float], dict, tuple, str, str],
+    job: tuple[str, str, tuple[float, float], bool, bool, dict, tuple, str, str],
 ) -> tuple[str, str, int]:
     """Worker job for CoACD cache prewarm."""
-    terrain_file, terrain_abspath, size, coacd_kwargs, cache_key, coacd_log_level, cache_path = job
+    (
+        terrain_file,
+        terrain_abspath,
+        size,
+        crop_to_size,
+        use_input_origin_frame,
+        coacd_kwargs,
+        cache_key,
+        coacd_log_level,
+        cache_path,
+    ) = job
     terrain_mesh, _ = _load_motion_matched_terrain_mesh(
         terrain_abspath=terrain_abspath,
         terrain_file=terrain_file,
         size=size,
+        crop_to_size=crop_to_size,
+        use_input_origin_frame=use_input_origin_frame,
     )
     parts_arrays = _run_coacd_decomposition(
         terrain_mesh=terrain_mesh,
@@ -467,6 +501,8 @@ def _prewarm_coacd_disk_cache(
         os.path.abspath(cfg.metadata_yaml),
         float(cfg.size[0]),
         float(cfg.size[1]),
+        bool(cfg.crop_to_size),
+        bool(cfg.use_input_origin_frame),
         float(cfg.collision_coacd_threshold),
         int(cfg.collision_coacd_max_convex_hull),
         str(cfg.collision_coacd_preprocess_mode),
@@ -530,6 +566,8 @@ def _prewarm_coacd_disk_cache(
                 terrain_abspath=terrain_abspath,
                 terrain_file=terrain_file,
                 size=size,
+                crop_to_size=bool(cfg.crop_to_size),
+                use_input_origin_frame=bool(cfg.use_input_origin_frame),
             )
             parts_arrays = _run_coacd_decomposition(
                 terrain_mesh=terrain_mesh,
@@ -548,6 +586,8 @@ def _prewarm_coacd_disk_cache(
                 terrain_file,
                 terrain_abspath,
                 size,
+                bool(cfg.crop_to_size),
+                bool(cfg.use_input_origin_frame),
                 coacd_kwargs,
                 cache_key,
                 coacd_log_level,
@@ -1541,6 +1581,8 @@ def motion_matched_terrain(
         terrain_abspath=terrain_abspath,
         terrain_file=terrain_file,
         size=terrain_size,
+        crop_to_size=bool(cfg.crop_to_size),
+        use_input_origin_frame=bool(cfg.use_input_origin_frame),
     )
     origin = np.array([cfg.size[0] / 2, cfg.size[1] / 2, -border_height])
 
