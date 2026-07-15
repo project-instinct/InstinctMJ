@@ -22,6 +22,7 @@ instinct_mj.egg-info/
 venv/
 .vscode/
 .pytest_cache/
+/tests/
 # Python cache files
 __pycache__/
 *.pyc

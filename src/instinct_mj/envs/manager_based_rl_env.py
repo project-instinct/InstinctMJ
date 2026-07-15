@@ -4,7 +4,20 @@ from collections.abc import Sequence
 
 import torch
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.managers import RewardTermCfg
+from mjlab.managers import (
+    ActionManager,
+    CommandManager,
+    CurriculumManager,
+    EventManager,
+    MetricsManager,
+    NullCommandManager,
+    NullCurriculumManager,
+    NullMetricsManager,
+    NullRecorderManager,
+    ObservationManager,
+    RecorderManager,
+    TerminationManager,
+)
 from mjlab.sim import Simulation
 from mjlab.utils.logging import print_info
 from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -12,7 +25,7 @@ from mjlab.viewer.offscreen_renderer import OffscreenRenderer
 from prettytable import PrettyTable
 
 from instinct_mj.envs.scene import InstinctScene
-from instinct_mj.managers import MultiRewardCfg, MultiRewardManager
+from instinct_mj.managers import MultiRewardManager
 from instinct_mj.monitors import MonitorManager
 
 
@@ -85,43 +98,53 @@ class InstinctRlEnv(ManagerBasedRlEnv):
         self.setup_manager_visualizers()
 
     def load_managers(self) -> None:
-        # Route Instinct tasks through MultiRewardManager so reward logging matches
-        # InstinctLab conventions:
-        #   Episode_Reward/rewards_<term>/{max_episode_len_s,sum,timestep}
-        reward_group_cfg = self._as_multi_reward_cfg(self.cfg.rewards)
-        if reward_group_cfg is not None:
-            self.cfg.rewards = {}
+        """Load managers in mjlab order with InstinctLab multi-reward logging."""
+        # Event manager (required before everything else for domain randomization).
+        self.event_manager = EventManager(self.cfg.events, self)
+        print_info(f"[INFO] {self.event_manager}")
 
-        super().load_managers()
+        self.sim.expand_model_fields(self.event_manager.domain_randomization_fields)
 
-        # Replace parent reward manager with MultiRewardManager when requested.
-        if reward_group_cfg is not None:
-            self.cfg.rewards = reward_group_cfg
-            self.reward_manager = MultiRewardManager(self.cfg.rewards, self, scale_by_dt=self.cfg.scale_rewards_by_dt)
-            print_info(f"[INFO] {self.reward_manager}")
+        # Command manager must precede observations since observations may use commands.
+        if len(self.cfg.commands) > 0:
+            self.command_manager = CommandManager(self.cfg.commands, self)
+        else:
+            self.command_manager = NullCommandManager()
+        print_info(f"[INFO] {self.command_manager}")
+
+        self.action_manager = ActionManager(self.cfg.actions, self)
+        print_info(f"[INFO] {self.action_manager}")
+        self.observation_manager = ObservationManager(self.cfg.observations, self)
+        print_info(f"[INFO] {self.observation_manager}")
+
+        self.termination_manager = TerminationManager(self.cfg.terminations, self)
+        print_info(f"[INFO] {self.termination_manager}")
+        self.reward_manager = MultiRewardManager(
+            self.cfg.rewards,
+            self,
+            scale_by_dt=self.cfg.scale_rewards_by_dt,
+        )
+        print_info(f"[INFO] {self.reward_manager}")
+        if len(self.cfg.curriculum) > 0:
+            self.curriculum_manager = CurriculumManager(self.cfg.curriculum, self)
+        else:
+            self.curriculum_manager = NullCurriculumManager()
+        print_info(f"[INFO] {self.curriculum_manager}")
+        if len(self.cfg.metrics) > 0:
+            self.metrics_manager = MetricsManager(self.cfg.metrics, self)
+        else:
+            self.metrics_manager = NullMetricsManager()
+        print_info(f"[INFO] {self.metrics_manager}")
+        if len(self.cfg.recorders) > 0:
+            self.recorder_manager = RecorderManager(self.cfg.recorders, self)
+        else:
+            self.recorder_manager = NullRecorderManager()
+        print_info(f"[INFO] {self.recorder_manager}")
+
+        self._configure_gym_env_spaces()
 
         self.monitor_manager = MonitorManager(self.cfg.monitors, self)
         print_info(f"[INFO] Monitor Manager: {self.monitor_manager}")
-
-    @staticmethod
-    def _as_multi_reward_cfg(rewards_cfg):
-        """Convert reward config into a multi-reward group config when possible.
-
-        - Keep existing MultiRewardCfg as-is.
-        - For flat dict[str, RewardTermCfg], wrap into {"rewards": ...}.
-        - For grouped dicts (dict[str, dict[str, RewardTermCfg]]), keep as-is.
-        """
-        if isinstance(rewards_cfg, MultiRewardCfg):
-            return rewards_cfg
-        if isinstance(rewards_cfg, dict):
-            first_non_none = next(
-                (value for value in rewards_cfg.values() if value is not None),
-                None,
-            )
-            if first_non_none is None or isinstance(first_non_none, RewardTermCfg):
-                return {"rewards": rewards_cfg}
-            return rewards_cfg
-        return None
 
     def setup_manager_visualizers(self) -> None:
         super().setup_manager_visualizers()

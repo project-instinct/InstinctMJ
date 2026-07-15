@@ -5,7 +5,6 @@ from copy import deepcopy
 
 import mjlab.envs.mdp as mdp
 import yaml
-from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.managers import (
     CurriculumTermCfg,
     EventTermCfg,
@@ -25,7 +24,6 @@ from mjlab.viewer.viewer_config import ViewerConfig
 import instinct_mj.envs.mdp as instinct_mdp
 import instinct_mj.tasks.shadowing.beyondmimic.beyondmimic_env_cfg as beyondmimic_cfg
 from instinct_mj.assets.unitree_g1 import G1_29DOF_TORSOBASE_POPSICLE_CFG, G1_MJCF_PATH, beyondmimic_action_scale
-from instinct_mj.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
 from instinct_mj.monitors import (
     ActuatorMonitorTerm,
     MonitorTermCfg,
@@ -48,8 +46,10 @@ G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 # NOTE: Change `MOTION_NAME`, `_hacked_selected_file_`, and the dataset path below
 # to your local motion setup before training / play.
 # Keep `_hacked_selected_file_` relative to the dataset root configured in `path`.
-MOTION_NAME = "LafanWalk1"
-_hacked_selected_file_ = "walk1_subject1_retargeted.npz"
+MOTION_NAME = "LafanKungfu1"
+_hacked_selected_file_ = "fightAndSports1_subject1_retargetted.npz"
+MOTION_NAME = "LafanSprint1"
+_hacked_selected_file_ = "sprint1_subject2_retargetted.npz"
 
 with open(f"/tmp/{MOTION_NAME}.yaml", "w") as f:
     yaml.dump(
@@ -94,7 +94,9 @@ motion_reference_cfg = MotionReferenceManagerCfg(
         MOTION_NAME: AmassMotionCfgBase(
             # NOTE: Replace this with your local BeyondMimic motion dataset root.
             # Example: os.path.expanduser("~/your/path/to/lafan1_gmr_unitree_g1_instinct")
-            path=os.path.expanduser("~/Xyk/Datasets/lafan1_gmr_unitree_g1_instinct"),
+            path=os.path.expanduser(
+                "~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz"
+            ),
             retargetting_func=None,
             filtered_motion_selection_filepath=f"/tmp/{MOTION_NAME}.yaml",
             motion_start_from_middle_range=[0.0, 0.8],
@@ -507,7 +509,7 @@ def _monitors_cfg(*, play: bool) -> dict[str, MonitorTermCfg]:
     return monitors
 
 
-def g1_beyondmimic_plane_env_cfg(*, play: bool = False) -> ManagerBasedRlEnvCfg:
+def g1_beyondmimic_plane_env_cfg(*, play: bool = False) -> beyondmimic_cfg.BeyondMimicEnvCfg:
     active_motion_reference_cfg = deepcopy(motion_reference_cfg_play if play else motion_reference_cfg)
     if play:
         robot_reference = deepcopy(G1_CFG)
@@ -575,12 +577,12 @@ def g1_beyondmimic_plane_env_cfg(*, play: bool = False) -> ManagerBasedRlEnvCfg:
         ),
     )
 
-    cfg = InstinctLabRLEnvCfg(
+    cfg = beyondmimic_cfg.BeyondMimicEnvCfg(
         scene=scene,
         actions=_actions_cfg(),
         observations=_observations_cfg(link_of_interests=list(active_motion_reference_cfg.link_of_interests)),
         commands=_commands_cfg(),
-        rewards=deepcopy(beyondmimic_cfg.make_beyondmimic_rewards()),
+        rewards={"rewards": deepcopy(beyondmimic_cfg.make_beyondmimic_rewards())},
         events=_events_cfg(),
         curriculum=_curriculum_cfg(),
         terminations=_terminations_cfg(),
@@ -657,20 +659,20 @@ def g1_beyondmimic_plane_env_cfg(*, play: bool = False) -> ManagerBasedRlEnvCfg:
             ("_linVelObs" if "base_lin_vel" in policy_terms and policy_terms["base_lin_vel"].scale != 0.0 else ""),
             f"_{MOTION_NAME}",
             ("_noPush" if cfg.events["push_robot"] is None else ""),
-            ("_noContactPenalty" if cfg.rewards["undesired_contacts"] is None else ""),
+            ("_noContactPenalty" if cfg.rewards["rewards"]["undesired_contacts"] is None else ""),
             "_GmrMotion",
         ]
     )
     return cfg
 
 
-def G1BeyondMimicPlaneEnvCfg() -> ManagerBasedRlEnvCfg:
+def G1BeyondMimicPlaneEnvCfg() -> beyondmimic_cfg.BeyondMimicEnvCfg:
     """Return the train env config."""
 
     return g1_beyondmimic_plane_env_cfg(play=False)
 
 
-def G1BeyondMimicPlaneEnvCfg_PLAY() -> ManagerBasedRlEnvCfg:
+def G1BeyondMimicPlaneEnvCfg_PLAY() -> beyondmimic_cfg.BeyondMimicEnvCfg:
     """Return the play env config."""
 
     return g1_beyondmimic_plane_env_cfg(play=True)

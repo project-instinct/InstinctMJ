@@ -56,6 +56,5 @@ class G1FlatPPORunnerCfg(InstinctRlOnPolicyRunnerCfg):
     load_run: object | None = None
 
     def __post_init__(self):
-        super().__post_init__()  # type: ignore
         self.resume = self.load_run is not None
         self.run_name = ""

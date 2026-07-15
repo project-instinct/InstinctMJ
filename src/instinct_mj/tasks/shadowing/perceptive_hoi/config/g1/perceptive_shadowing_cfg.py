@@ -58,7 +58,7 @@ G1_29DOF_LINKS = [
     "right_ankle_roll_link",
 ]
 
-OMOMO_DATASET_PATH = "~/Datasets/OMOMO/retargeted"
+OMOMO_DATASET_PATH = "~/Datasets/OMOMO/retargeted_omniretarget_instinctmj_torso_v10_object_xy_align_foot_lock"
 
 MESH_FILE_PATHS = {
     "floorlamp": "~/Datasets/OMOMO/data/captured_objects/floorlamp_cleaned_simplified.obj",
@@ -292,6 +292,7 @@ class G1PerceptiveHoiShadowingEnvCfg_PLAY(G1PerceptiveHoiShadowingEnvCfg):
         # self.events.reset_robot.params["randomize_pose_range"]["roll"] = (0.0, 0.6)
 
         # remove some terimation terms
+        self.sim.nconmax = 128
         self.terminations["base_pos_too_far"] = None
         self.terminations["base_pg_too_far"] = None
         self.terminations["link_pos_too_far"] = None

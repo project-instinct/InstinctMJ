@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import copy
 import math
+from dataclasses import dataclass, field
 
 import mjlab.envs.mdp as mdp
-from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers import CurriculumTermCfg as CurrTerm
 from mjlab.managers import EventTermCfg as Event
@@ -30,6 +30,7 @@ from instinct_mj.assets.unitree_g1 import (
     beyondmimic_action_scale,
     beyondmimic_g1_29dof_actuator_cfgs,
 )
+from instinct_mj.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
 
 G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 
@@ -39,49 +40,56 @@ G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 # ============================================================================
 
 
-def _scene_cfg(play: bool) -> SceneCfg:
-    robot_cfg = copy.deepcopy(G1_CFG)
-    robot_cfg.articulation.actuators = copy.deepcopy(beyondmimic_g1_29dof_actuator_cfgs)
-    feet_contact_forces = ContactSensorCfg(
-        name="feet_contact_forces",
-        primary=ContactMatch(
-            mode="body",
-            pattern=("left_ankle_roll_link", "right_ankle_roll_link"),
-            entity="robot",
-        ),
-        secondary=ContactMatch(mode="body", pattern="terrain"),
-        fields=("found", "force"),
-        reduce="maxforce",
-        track_air_time=True,
-        history_length=3,
-    )
-    base_contact_forces = ContactSensorCfg(
-        name="base_contact_forces",
-        primary=ContactMatch(
-            mode="body",
-            pattern=(
-                "torso_link",
-                ".*_shoulder_.*",
-                ".*_elbow_.*",
-                ".*_wrist_.*",
-                ".*_hip_.*",
-                ".*_knee_.*",
+@dataclass(kw_only=True)
+class G1LocomotionSceneCfg(SceneCfg):
+    """G1 locomotion scene in mjlab-native dataclass form."""
+
+    def __post_init__(self) -> None:
+        robot_cfg = copy.deepcopy(G1_CFG)
+        robot_cfg.articulation.actuators = copy.deepcopy(beyondmimic_g1_29dof_actuator_cfgs)
+        feet_contact_forces = ContactSensorCfg(
+            name="feet_contact_forces",
+            primary=ContactMatch(
+                mode="body",
+                pattern=("left_ankle_roll_link", "right_ankle_roll_link"),
+                entity="robot",
             ),
-            entity="robot",
-        ),
-        secondary=ContactMatch(mode="body", pattern="terrain"),
-        fields=("found", "force"),
-        reduce="maxforce",
-        track_air_time=False,
-        history_length=3,
-    )
-    return SceneCfg(
+            secondary=ContactMatch(mode="body", pattern="terrain"),
+            fields=("found", "force"),
+            reduce="maxforce",
+            track_air_time=True,
+            history_length=3,
+        )
+        base_contact_forces = ContactSensorCfg(
+            name="base_contact_forces",
+            primary=ContactMatch(
+                mode="body",
+                pattern=(
+                    "torso_link",
+                    ".*_shoulder_.*",
+                    ".*_elbow_.*",
+                    ".*_wrist_.*",
+                    ".*_hip_.*",
+                    ".*_knee_.*",
+                ),
+                entity="robot",
+            ),
+            secondary=ContactMatch(mode="body", pattern="terrain"),
+            fields=("found", "force"),
+            reduce="maxforce",
+            track_air_time=False,
+            history_length=3,
+        )
+        self.terrain = TerrainEntityCfg(terrain_type="plane")
+        self.entities = {"robot": robot_cfg}
+        self.sensors = (feet_contact_forces, base_contact_forces)
+        self.extent = 2.0
+
+
+def _scene_cfg(play: bool) -> G1LocomotionSceneCfg:
+    return G1LocomotionSceneCfg(
         num_envs=1 if play else 4096,
         env_spacing=2.5,
-        terrain=TerrainEntityCfg(terrain_type="plane"),
-        entities={"robot": robot_cfg},
-        sensors=(feet_contact_forces, base_contact_forces),
-        extent=2.0,
     )
 
 
@@ -357,55 +365,72 @@ def _curriculum_cfg() -> dict[str, CurrTerm]:
     return {}
 
 
-def instinct_g1_locomotion_flat_env_cfg(*, play: bool = False) -> ManagerBasedRlEnvCfg:
-    """Build locomotion config in mjlab-native manager dict style."""
-    cfg = ManagerBasedRlEnvCfg(
-        scene=_scene_cfg(play=play),
-        actions=_actions_cfg(),
-        commands=_commands_cfg(),
-        observations=_observations_cfg(),
-        rewards=_rewards_cfg(),
-        terminations=_terminations_cfg(),
-        events=_events_cfg(),
-        curriculum=_curriculum_cfg(),
-        viewer=ViewerConfig(
+@dataclass(kw_only=True)
+class G1LocomotionFlatEnvCfg(InstinctLabRLEnvCfg):
+    scene: G1LocomotionSceneCfg = field(default_factory=lambda: _scene_cfg(play=False))
+    actions: dict = field(default_factory=_actions_cfg)
+    commands: dict = field(default_factory=_commands_cfg)
+    observations: dict = field(default_factory=_observations_cfg)
+    rewards: dict = field(default_factory=lambda: {"rewards": _rewards_cfg()})
+    terminations: dict = field(default_factory=_terminations_cfg)
+    events: dict = field(default_factory=_events_cfg)
+    curriculum: dict = field(default_factory=_curriculum_cfg)
+    monitors: dict = field(default_factory=dict)
+    viewer: ViewerConfig = field(
+        default_factory=lambda: ViewerConfig(
             lookat=(0.0, 0.0, 0.0),
             distance=2.9,
             elevation=-10.0,
             azimuth=45.0,
             origin_type=ViewerConfig.OriginType.ASSET_ROOT,
             entity_name="robot",
-        ),
-        sim=SimulationCfg(
+        )
+    )
+    sim: SimulationCfg = field(
+        default_factory=lambda: SimulationCfg(
             mujoco=MujocoCfg(
                 timestep=0.005,
                 solver="newton",
                 iterations=10,
                 ls_iterations=20,
-                ccd_iterations=500 if not play else 50,
+                ccd_iterations=500,
             ),
-        ),
-        decimation=4,
-        episode_length_s=20.0,
+        )
     )
-    cfg.monitors = {}
-    cfg.sim.njmax = 300
-    joint_pos_action: JointPositionActionCfg = cfg.actions["joint_pos"]
-    joint_pos_action.scale = copy.deepcopy(beyondmimic_action_scale)
-    feet_air_time = cfg.rewards.get("feet_air_time")
-    stand_still = cfg.rewards.get("stand_still")
-    action_rate_l2 = cfg.rewards.get("action_rate_l2")
-    joint_deviation_knee = cfg.rewards.get("joint_deviation_knee")
-    cfg.run_name = "".join(
-        [
-            "G1Flat",
-            f"_feetAirTime{feet_air_time.weight:.2f}" if feet_air_time is not None else "",
-            f"_standStill{-stand_still.weight:.2f}" if stand_still is not None else "",
-            f"_actionRate{-action_rate_l2.weight:.2f}" if action_rate_l2 is not None else "",
-            (f"_jointDeviationKnee{-joint_deviation_knee.weight:.2f}" if joint_deviation_knee is not None else ""),
-        ]
-    )
+    decimation: int = 4
+    episode_length_s: float = 20.0
+
+    def __post_init__(self) -> None:
+        # All managers are already dicts, no conversion needed!
+        self.sim.njmax = 300
+        joint_pos_action: JointPositionActionCfg = self.actions["joint_pos"]
+        joint_pos_action.scale = copy.deepcopy(beyondmimic_action_scale)
+        reward_terms = self.rewards["rewards"]
+        feet_air_time = reward_terms.get("feet_air_time")
+        stand_still = reward_terms.get("stand_still")
+        action_rate_l2 = reward_terms.get("action_rate_l2")
+        joint_deviation_knee = reward_terms.get("joint_deviation_knee")
+        self.run_name = "".join(
+            [
+                "G1Flat",
+                f"_feetAirTime{feet_air_time.weight:.2f}" if feet_air_time is not None else "",
+                f"_standStill{-stand_still.weight:.2f}" if stand_still is not None else "",
+                f"_actionRate{-action_rate_l2.weight:.2f}" if action_rate_l2 is not None else "",
+                (
+                    f"_jointDeviationKnee{-joint_deviation_knee.weight:.2f}"
+                    if joint_deviation_knee is not None
+                    else ""
+                ),
+            ]
+        )
+
+
+def instinct_g1_locomotion_flat_env_cfg(*, play: bool = False) -> G1LocomotionFlatEnvCfg:
+    """Build locomotion config in mjlab-native manager dict style."""
+    cfg = G1LocomotionFlatEnvCfg()
     if play:
+        cfg.scene = _scene_cfg(play=True)
+        cfg.sim.mujoco.ccd_iterations = 50
         base_velocity_cmd: UniformVelocityCommandCfg = cfg.commands["base_velocity"]
         base_velocity_cmd.resampling_time_range = (2.0, 2.0)
         cfg.events["base_external_force_torque"] = None

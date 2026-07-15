@@ -22,7 +22,6 @@ from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 import instinct_mj.envs.mdp as instinct_mdp
 import instinct_mj.tasks.shadowing.mdp as shadowing_mdp
 from instinct_mj.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
-from instinct_mj.managers import MultiRewardCfg
 from instinct_mj.monitors import (
     BodyStatMonitorTerm,
     JointStatMonitorTerm,
@@ -651,7 +650,7 @@ class ShadowingEnvCfg(InstinctLabRLEnvCfg):
     commands: dict = field(default_factory=make_commands)
     actions: dict = field(default_factory=make_actions)
     observations: dict = field(default_factory=make_observations)
-    rewards: dict = field(default_factory=shadowing_rewards_terms)
+    rewards: dict = field(default_factory=lambda: {"rewards": shadowing_rewards_terms()})
     events: dict = field(default_factory=make_events)
     curriculum: dict = field(default_factory=make_curriculum)
     terminations: dict = field(default_factory=make_terminations)

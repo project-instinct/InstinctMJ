@@ -165,9 +165,8 @@ def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCf
 
     Contact semantics differ from the perceptive task: there is NO secondary
     match, so "any contact with a robot body counts" (terrain + objects + self).
-    This matches IsaacLab's ContactSensor(prim_path="Robot/.*") net-force
-    semantics, which the shared undesired_contacts / illegal_reset_contact terms
-    rely on.
+    This preserves the source task's whole-robot net-force semantics, which the
+    shared undesired_contacts / illegal_reset_contact terms rely on.
     """
     sensor_list: list[SensorCfg] = [
         ContactSensorCfg(
@@ -175,7 +174,7 @@ def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCf
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
             # No secondary on purpose (see docstring).
             fields=("found", "force"),
-            reduce="maxforce",
+            reduce="netforce",
             history_length=3,
             track_air_time=True,
         )
@@ -546,7 +545,7 @@ def make_hoi_events() -> dict[str, EventTermCfg]:
 
     Domain-randomization events mirror the perceptive task. HOI replaces
     'match_motion_ref_with_scene' (motion-matched terrain) with rigid-object
-    reference reset/update events, matching IsaacLab's perceptive_hoi config.
+    reference reset/update events, matching the source perceptive_hoi config.
     """
     return {
         # domain rand
@@ -859,7 +858,7 @@ class PerceptiveHoiShadowingEnvCfg(InstinctLabRLEnvCfg):
     commands: dict = field(default_factory=make_hoi_commands)
     actions: dict = field(default_factory=make_hoi_actions)
     observations: dict = field(default_factory=make_hoi_observations)
-    rewards: dict = field(default_factory=make_hoi_rewards)
+    rewards: dict = field(default_factory=lambda: {"rewards": make_hoi_rewards()})
     events: dict = field(default_factory=make_hoi_events)
     curriculum: dict = field(default_factory=make_hoi_curriculum)
     terminations: dict = field(default_factory=make_hoi_terminations)

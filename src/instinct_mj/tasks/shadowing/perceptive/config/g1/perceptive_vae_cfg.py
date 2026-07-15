@@ -57,7 +57,7 @@ class TerrainMotionCfg(TerrainMotionCfgBase):
     # metadata file lives at another location.
     metadata_yaml: object = field(default_factory=lambda: os.path.expanduser(f"{MOTION_FOLDER}/metadata.yaml"))
 
-    max_origins_per_motion: int = 49
+    max_origins_per_motion: int = 9
 
     ensure_link_below_zero_ground: bool = False
 
@@ -294,7 +294,7 @@ class G1PerceptiveVaeEnvCfg_PLAY(G1PerceptiveVaeEnvCfg):
             distance=3.2016,
             elevation=51.3402,
             azimuth=90.0,
-            origin_type=ViewerConfig.OriginType.ASSET_BODY,
+            origin_type=ViewerConfig.OriginType.WORLD,
             entity_name="robot",
             body_name="torso_link",
         )
@@ -336,8 +336,9 @@ class G1PerceptiveVaeEnvCfg_PLAY(G1PerceptiveVaeEnvCfg):
         terrain_cfg.metadata_yaml = motion_buffer.metadata_yaml
 
         # Use non-terrain-matching motion and plane to hack the scene.
-        self.scene.terrain.terrain_generator.num_rows = 6
-        self.scene.terrain.terrain_generator.num_cols = 6
+        # A single terrain tile is enough for play and keeps the imported terrain triangle budget manageable.
+        self.scene.terrain.terrain_generator.num_rows = 1
+        self.scene.terrain.terrain_generator.num_cols = 1
         # self.scene.motion_reference.motion_buffers.pop(MOTION_NAME)
         # self.scene.motion_reference.motion_buffers["AMASSMotion"] = AMASSMotionCfg()
         # self.scene.motion_reference.motion_buffers["AMASSMotion"].motion_start_from_middle_range = [0.0, 0.0]
