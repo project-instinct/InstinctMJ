@@ -30,7 +30,7 @@ G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 
 # NOTE: Change this if your local perceptive shadowing dataset lives elsewhere.
 # The folder should contain the motion files and a `metadata.yaml`.
-MOTION_FOLDER = "~/Xyk/Datasets/20251116_50cm_kneeClimbStep1"
+MOTION_FOLDER = "~/Xyk/Datasets/her_leveled"
 
 # NOTE: Optional play override for perceptive shadowing.
 # Leave this as `None` to reuse `MOTION_FOLDER`, or set it to another local
@@ -148,11 +148,12 @@ class TerrainMotionCfg(TerrainMotionCfgBase):
 
     max_origins_per_motion: int = 49
 
-    ensure_link_below_zero_ground: bool = False
+    # Lift reset poses away from the terrain to reduce early pelvis/hip contacts.
+    ensure_link_below_zero_ground: bool = True
 
     motion_start_from_middle_range: list = field(default_factory=lambda: [0.0, 0.0])
 
-    motion_start_height_offset: float = 0.0
+    motion_start_height_offset: float = 0.1
 
     motion_bin_length_s: float = 1.0
 
@@ -234,7 +235,7 @@ motion_reference_cfg_play.reference_entity_name = "robot_reference"
 class G1PerceptiveShadowingEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
     scene: perceptual_cfg.PerceptiveShadowingSceneCfg = field(
         default_factory=lambda: perceptual_cfg.PerceptiveShadowingSceneCfg(
-            num_envs=3072,
+            num_envs=1024,
             entities={"robot": deepcopy(G1_CFG)},
             sensors=perceptual_cfg.make_perceptive_scene_sensors(
                 motion_reference=deepcopy(motion_reference_cfg),
@@ -273,7 +274,10 @@ class G1PerceptiveShadowingEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
             terrain_cfg = self.scene.terrain.terrain_generator.sub_terrains["motion_matched"]
             terrain_cfg.path = motion_buffer.path
             terrain_cfg.metadata_yaml = motion_buffer.metadata_yaml
-        _maybe_disable_single_motion_binning(motion_buffer)
+        single_motion_without_bins = _maybe_disable_single_motion_binning(motion_buffer)
+        if single_motion_without_bins:
+            self.curriculum["beyond_adaptive_sampling"] = None
+            self.events["bin_fail_counter_smoothing"] = None
         active_motion_name = list(motion_reference_cfg.motion_buffers.keys())[0]
         active_motion_buffer = motion_reference_cfg.motion_buffers[active_motion_name]
 
@@ -294,6 +298,8 @@ class G1PerceptiveShadowingEnvCfg(perceptual_cfg.PerceptiveShadowingEnvCfg):
                 ),
             ]
         )
+        if single_motion_without_bins:
+            self.run_name = self.run_name.replace("_concatMotionBins", "_independentMotionBins")
 
 
 @dataclass(kw_only=True)
@@ -318,7 +324,7 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
             distance=2.1213,
             elevation=45.0,
             azimuth=0.0,
-            origin_type=ViewerConfig.OriginType.ASSET_BODY,
+            origin_type=ViewerConfig.OriginType.WORLD,
             entity_name="robot",
             body_name="torso_link",
         )
@@ -351,8 +357,8 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
             terrain_cfg = self.scene.terrain.terrain_generator.sub_terrains["motion_matched"]
             terrain_cfg.path = motion_buffer.path
             terrain_cfg.metadata_yaml = motion_buffer.metadata_yaml
-            self.scene.terrain.terrain_generator.num_rows = 6
-            self.scene.terrain.terrain_generator.num_cols = 6
+            self.scene.terrain.terrain_generator.num_rows = 1
+            self.scene.terrain.terrain_generator.num_cols = 1
         self.run_name = self.run_name.replace("_concatMotionBins", "_independentMotionBins")
         # self.scene.motion_reference.motion_buffers.pop(MOTION_NAME)
         # self.scene.motion_reference.motion_buffers["AMASSMotion"] = AMASSMotionCfg()
@@ -376,6 +382,7 @@ class G1PerceptiveShadowingEnvCfg_PLAY(G1PerceptiveShadowingEnvCfg):
         # put the reference in scene and move the robot elsewhere and visualize the reference
         # self.events.reset_robot.params["position_offset"] = [0.0, 1.0, 2.0]
         # self.scene.motion_reference.visualizing_robot_offset = (0.0, 0.0, 0.0)
+        motion_reference_cfg.visualizing_robot_offset = (0.0, 1.0, 0.0)
         # self.viewer.entity_name = "robot_reference"
 
         # remove some randomizations

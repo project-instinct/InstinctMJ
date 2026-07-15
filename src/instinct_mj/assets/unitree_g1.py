@@ -137,8 +137,8 @@ DAMPING_7520_22 = 2.0 * DAMPING_RATIO * ARMATURE_7520_22 * NATURAL_FREQ
 DAMPING_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ
 
 
-# IsaacLab's DelayedPDActuator samples one command lag per episode (in
-# actuator.reset()) and holds it until the next reset. mjlab's DelayBuffer instead
+# The source delayed actuator samples one command lag per episode (in its reset)
+# and holds it until the next reset. mjlab's DelayBuffer instead
 # resamples a new lag every physics step when delay_update_period == 0. To recover the
 # per-episode-fixed-delay semantics we resample only on reset: pick an update period
 # larger than any episode's physics-step count so the lag is drawn once on the first

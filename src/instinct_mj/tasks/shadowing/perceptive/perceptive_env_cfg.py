@@ -175,11 +175,11 @@ class PerceptiveShadowingSceneCfg(SceneCfg):
         default_factory=lambda: TerrainImporterCfg(
             terrain_type="hacked_generator",
             terrain_generator=FiledTerrainGeneratorCfg(
-                size=(9, 12),
+                size=(30, 16),
                 border_width=0.0,
                 border_height=0.0,
-                num_rows=7,
-                num_cols=7,
+                num_rows=3,
+                num_cols=3,
                 add_lights=True,
                 sub_terrains={
                     # MotionMatchedTerrainCfg keeps motion-terrain pairing from metadata.yaml.
@@ -188,6 +188,7 @@ class PerceptiveShadowingSceneCfg(SceneCfg):
                         proportion=1.0,
                         path="PLACEHOLDER",  # Will be overridden in concrete env cfg __post_init__
                         metadata_yaml="PLACEHOLDER",  # Will be overridden in concrete env cfg __post_init__
+                        use_input_origin_frame=True,
                         collision_coacd=True,
                         # Use CoACD hulls directly as rendered terrain mesh (instead of source STL mesh).
                         collision_coacd_visualize_collision_hulls=True,
@@ -218,7 +219,7 @@ class PerceptiveShadowingSceneCfg(SceneCfg):
                 primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
                 secondary=ContactMatch(mode="body", pattern="terrain"),
                 fields=("found", "force"),
-                reduce="maxforce",
+                reduce="netforce",
                 history_length=3,
                 track_air_time=True,
             ),
@@ -303,7 +304,7 @@ def make_perceptive_scene_sensors(
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
             secondary=ContactMatch(mode="body", pattern="terrain"),
             fields=("found", "force"),
-            reduce="maxforce",
+            reduce="netforce",
             history_length=3,
             track_air_time=True,
         )
@@ -953,7 +954,7 @@ class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
     commands: dict = field(default_factory=make_perceptive_commands)
     actions: dict = field(default_factory=make_actions)
     observations: dict = field(default_factory=make_observations)
-    rewards: dict = field(default_factory=make_rewards)
+    rewards: dict = field(default_factory=lambda: {"rewards": make_rewards()})
     events: dict = field(default_factory=make_events)
     curriculum: dict = field(default_factory=make_curriculum)
     terminations: dict = field(default_factory=make_terminations)

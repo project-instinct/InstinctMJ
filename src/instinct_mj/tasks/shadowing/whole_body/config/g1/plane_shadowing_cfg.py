@@ -11,7 +11,6 @@ from copy import deepcopy
 import mjlab.envs.mdp as mdp
 import mujoco
 import yaml
-from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.managers import (
     CurriculumTermCfg,
     EventTermCfg,
@@ -31,7 +30,6 @@ from mjlab.viewer.viewer_config import ViewerConfig
 import instinct_mj.envs.mdp as instinct_mdp
 import instinct_mj.tasks.shadowing.whole_body.shadowing_env_cfg as shadowing_cfg
 from instinct_mj.assets.unitree_g1 import G1_29DOF_TORSOBASE_POPSICLE_CFG, beyondmimic_action_scale
-from instinct_mj.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
 from instinct_mj.monitors import (
     MonitorTermCfg,
     MotionReferenceMonitorTerm,
@@ -268,9 +266,11 @@ motion_reference_cfg = MotionReferenceManagerCfg(
             # path = os.path.expanduser("~/your/path/to/AMASS_SMPLX-NG_GMR_29dof_g1_torsoBase_retargetted_20250901_instinctnpz")
             # path = _path_
             # NOTE: Change this to the active local whole-body shadowing dataset root.
-            path=os.path.expanduser("~/Xyk/Datasets/lafan1_gmr_unitree_g1_instinct"),
+            path=os.path.expanduser(
+                "~/Xyk/Datasets/NoKov-Marslab-Motions-instinctnpz/20251016_diveroll4_single"
+            ),
             retargetting_func=None,
-            filtered_motion_selection_filepath=f"/tmp/{MOTION_NAME}.yaml",
+            filtered_motion_selection_filepath=None,
             motion_start_from_middle_range=[0.0, 0.8],
             motion_start_height_offset=0.0,
             ensure_link_below_zero_ground=False,
@@ -688,7 +688,7 @@ def _monitors_cfg() -> dict[str, MonitorTermCfg]:
     }
 
 
-def g1_plane_shadowing_env_cfg(*, play: bool = False) -> ManagerBasedRlEnvCfg:
+def g1_plane_shadowing_env_cfg(*, play: bool = False) -> shadowing_cfg.ShadowingEnvCfg:
     active_motion_reference_cfg = deepcopy(motion_reference_cfg_play if play else motion_reference_cfg)
     entities = {
         "robot": deepcopy(G1_CFG),
@@ -733,12 +733,12 @@ def g1_plane_shadowing_env_cfg(*, play: bool = False) -> ManagerBasedRlEnvCfg:
         spec_fn=_edit_shadowing_scene_spec,
     )
 
-    cfg = InstinctLabRLEnvCfg(
+    cfg = shadowing_cfg.ShadowingEnvCfg(
         scene=scene,
         actions=_actions_cfg(),
         observations=_observations_cfg(link_of_interests=list(active_motion_reference_cfg.link_of_interests)),
         commands=_commands_cfg(),
-        rewards=deepcopy(shadowing_cfg.shadowing_rewards_terms()),
+        rewards={"rewards": deepcopy(shadowing_cfg.shadowing_rewards_terms())},
         events=_events_cfg(),
         curriculum=_curriculum_cfg(),
         terminations=_terminations_cfg(),
@@ -902,13 +902,13 @@ def g1_plane_shadowing_env_cfg(*, play: bool = False) -> ManagerBasedRlEnvCfg:
     return cfg
 
 
-def G1PlaneShadowingEnvCfg() -> ManagerBasedRlEnvCfg:
+def G1PlaneShadowingEnvCfg() -> shadowing_cfg.ShadowingEnvCfg:
     """Return the train env config."""
 
     return g1_plane_shadowing_env_cfg(play=False)
 
 
-def G1PlaneShadowingEnvCfg_PLAY() -> ManagerBasedRlEnvCfg:
+def G1PlaneShadowingEnvCfg_PLAY() -> shadowing_cfg.ShadowingEnvCfg:
     """Return the play env config."""
 
     return g1_plane_shadowing_env_cfg(play=True)
