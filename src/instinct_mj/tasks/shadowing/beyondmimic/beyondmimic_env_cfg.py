@@ -141,7 +141,7 @@ class BeyondMimicSceneCfg(SceneCfg):
                     entity="robot",
                 ),
                 secondary=None,
-                fields=("found", "force"),
+                fields=("force",),
                 reduce="netforce",
                 history_length=3,
                 num_slots=1,
@@ -607,6 +607,7 @@ class BeyondMimicEnvCfg(InstinctLabRLEnvCfg):
         # auto-allocating enormous EPA buffers.
         self.sim.nconmax = 100
         self.sim.njmax = 300
+        self.sim.contact_sensor_maxmatch = 100
         self.sim.mujoco.timestep = 1.0 / 50.0 / self.decimation
         self.sim.mujoco.iterations = 10
         self.sim.mujoco.ls_iterations = 20

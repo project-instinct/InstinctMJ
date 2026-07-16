@@ -715,7 +715,7 @@ def g1_plane_shadowing_env_cfg(*, play: bool = False) -> shadowing_cfg.Shadowing
                     ),
                 ),
                 secondary=None,
-                fields=("found", "force"),
+                fields=("force",),
                 reduce="netforce",
                 num_slots=1,
                 history_length=3,

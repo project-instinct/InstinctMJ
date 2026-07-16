@@ -228,6 +228,7 @@ def instinct_g1_parkour_amp_env_cfg(
     cfg.episode_length_s = 20.0
     cfg.sim.nconmax = 128
     cfg.sim.njmax = 700
+    cfg.sim.contact_sensor_maxmatch = 128
     cfg.sim.mujoco.iterations = 10
     cfg.sim.mujoco.ls_iterations = 20
     cfg.sim.mujoco.ccd_iterations = 128
@@ -268,7 +269,7 @@ def instinct_g1_parkour_amp_env_cfg(
                 pattern=("left_ankle_roll_link", "right_ankle_roll_link"),
                 entity="robot",
             ),
-            fields=("found", "force"),
+            fields=("force",),
             reduce="netforce",
             track_air_time=True,
             force_threshold=1.0,
@@ -278,7 +279,7 @@ def instinct_g1_parkour_amp_env_cfg(
             name="torso_contact_forces",
             primary=ContactMatch(mode="body", pattern="torso_link", entity="robot"),
             secondary=None,
-            fields=("found", "force"),
+            fields=("force",),
             reduce="netforce",
             track_air_time=False,
             history_length=3,
@@ -291,7 +292,7 @@ def instinct_g1_parkour_amp_env_cfg(
                 entity="robot",
                 exclude=("left_ankle_roll_link", "right_ankle_roll_link"),
             ),
-            fields=("found", "force"),
+            fields=("force",),
             reduce="netforce",
             track_air_time=False,
             history_length=3,

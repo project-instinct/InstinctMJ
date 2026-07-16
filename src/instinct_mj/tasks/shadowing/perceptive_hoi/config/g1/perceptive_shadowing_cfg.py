@@ -216,7 +216,8 @@ class G1PerceptiveHoiShadowingEnvCfg(perceptual_cfg.PerceptiveHoiShadowingEnvCfg
         # self.scene.robot.spawn.rigid_props.max_depenetration_velocity = 0.3
         self.actions["joint_pos"].scale = beyondmimic_action_scale
         self.sim.njmax = 700
-        self.sim.nconmax = 128
+        self.sim.nconmax = 256
+        self.sim.contact_sensor_maxmatch = 256
         self.sim.mujoco.jacobian = "sparse"
 
         MOTION_NAME = list(motion_reference_cfg.motion_buffers.keys())[0]
@@ -293,7 +294,8 @@ class G1PerceptiveHoiShadowingEnvCfg_PLAY(G1PerceptiveHoiShadowingEnvCfg):
         # self.events.reset_robot.params["randomize_pose_range"]["roll"] = (0.0, 0.6)
 
         # remove some terimation terms
-        self.sim.nconmax = 128
+        self.sim.nconmax = 256
+        self.sim.contact_sensor_maxmatch = 256
         self.terminations["base_pos_too_far"] = None
         self.terminations["base_pg_too_far"] = None
         self.terminations["link_pos_too_far"] = None
