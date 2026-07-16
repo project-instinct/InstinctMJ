@@ -147,6 +147,16 @@ DAMPING_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ
 # offset would skip the step-0 draw and leave the lag pinned at its reset value of 0).
 _DELAY_RESET_ONLY_PERIOD = 1_000_000
 
+# mjlab fuses delayed built-in actuators that have identical delay settings into
+# one DelayBuffer. Use distinct reset-only periods for the five source actuator
+# groups so each group samples its own per-environment episode delay. The split
+# configs inside the legs and arms groups intentionally keep the same period.
+_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_LEGS = _DELAY_RESET_ONLY_PERIOD
+_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_FEET = _DELAY_RESET_ONLY_PERIOD + 1
+_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_WAIST = _DELAY_RESET_ONLY_PERIOD + 2
+_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_WAIST_YAW = _DELAY_RESET_ONLY_PERIOD + 3
+_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_ARMS = _DELAY_RESET_ONLY_PERIOD + 4
+
 G1_29DOF_TORSOBASE_DELAYED_LEGS = BuiltinPdActuatorCfg(
     target_names_expr=(".*_hip_yaw_joint", ".*_hip_roll_joint", ".*_hip_pitch_joint"),
     effort_limit=88.0,
@@ -326,7 +336,7 @@ BEYONDMIMIC_G1_29DOF_DELAYED_LEGS_PITCH_YAW = BuiltinPdActuatorCfg(
     armature=ARMATURE_7520_14,
     delay_min_lag=0,
     delay_max_lag=2,
-    delay_update_period=_DELAY_RESET_ONLY_PERIOD,
+    delay_update_period=_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_LEGS,
     delay_per_env_phase=False,
 )
 BEYONDMIMIC_G1_29DOF_DELAYED_WAIST_YAW = BuiltinPdActuatorCfg(
@@ -337,7 +347,7 @@ BEYONDMIMIC_G1_29DOF_DELAYED_WAIST_YAW = BuiltinPdActuatorCfg(
     armature=ARMATURE_7520_14,
     delay_min_lag=0,
     delay_max_lag=2,
-    delay_update_period=_DELAY_RESET_ONLY_PERIOD,
+    delay_update_period=_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_WAIST_YAW,
     delay_per_env_phase=False,
 )
 BEYONDMIMIC_G1_29DOF_DELAYED_LEGS_ROLL_KNEE = BuiltinPdActuatorCfg(
@@ -348,7 +358,7 @@ BEYONDMIMIC_G1_29DOF_DELAYED_LEGS_ROLL_KNEE = BuiltinPdActuatorCfg(
     armature=ARMATURE_7520_22,
     delay_min_lag=0,
     delay_max_lag=2,
-    delay_update_period=_DELAY_RESET_ONLY_PERIOD,
+    delay_update_period=_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_LEGS,
     delay_per_env_phase=False,
 )
 BEYONDMIMIC_G1_29DOF_DELAYED_FEET = BuiltinPdActuatorCfg(
@@ -359,7 +369,7 @@ BEYONDMIMIC_G1_29DOF_DELAYED_FEET = BuiltinPdActuatorCfg(
     armature=2.0 * ARMATURE_5020,
     delay_min_lag=0,
     delay_max_lag=2,
-    delay_update_period=_DELAY_RESET_ONLY_PERIOD,
+    delay_update_period=_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_FEET,
     delay_per_env_phase=False,
 )
 BEYONDMIMIC_G1_29DOF_DELAYED_WAIST = BuiltinPdActuatorCfg(
@@ -370,7 +380,7 @@ BEYONDMIMIC_G1_29DOF_DELAYED_WAIST = BuiltinPdActuatorCfg(
     armature=2.0 * ARMATURE_5020,
     delay_min_lag=0,
     delay_max_lag=2,
-    delay_update_period=_DELAY_RESET_ONLY_PERIOD,
+    delay_update_period=_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_WAIST,
     delay_per_env_phase=False,
 )
 BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_5020 = BuiltinPdActuatorCfg(
@@ -387,7 +397,7 @@ BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_5020 = BuiltinPdActuatorCfg(
     armature=ARMATURE_5020,
     delay_min_lag=0,
     delay_max_lag=2,
-    delay_update_period=_DELAY_RESET_ONLY_PERIOD,
+    delay_update_period=_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_ARMS,
     delay_per_env_phase=False,
 )
 BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_4010 = BuiltinPdActuatorCfg(
@@ -398,7 +408,7 @@ BEYONDMIMIC_G1_29DOF_DELAYED_ARMS_4010 = BuiltinPdActuatorCfg(
     armature=ARMATURE_4010,
     delay_min_lag=0,
     delay_max_lag=2,
-    delay_update_period=_DELAY_RESET_ONLY_PERIOD,
+    delay_update_period=_BEYONDMIMIC_DELAY_RESET_ONLY_PERIOD_ARMS,
     delay_per_env_phase=False,
 )
 beyondmimic_g1_29dof_delayed_actuator_cfgs: tuple[ActuatorCfg, ...] = (

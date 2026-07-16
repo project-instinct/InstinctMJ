@@ -567,8 +567,8 @@ def g1_beyondmimic_plane_env_cfg(*, play: bool = False) -> beyondmimic_cfg.Beyon
                     ),
                     entity="robot",
                 ),
-                secondary=ContactMatch(mode="body", pattern="terrain"),
-                fields=("found", "force"),
+                secondary=None,
+                fields=("force",),
                 reduce="netforce",
                 history_length=3,
                 num_slots=1,
@@ -605,11 +605,13 @@ def g1_beyondmimic_plane_env_cfg(*, play: bool = False) -> beyondmimic_cfg.Beyon
 
     cfg.sim.nconmax = 100  # Higher than tracking due to many monitored body-ground contacts
     cfg.sim.njmax = 350  # Increased to meet constraint requirements
+    cfg.sim.contact_sensor_maxmatch = 100
     if play:
         # Play can hit higher instantaneous contacts depending on sampled pose / motion frame.
         # Use MJWarp heuristics instead of fixed small caps to avoid nconmax/njmax overflows.
         cfg.sim.nconmax = None
         cfg.sim.njmax = None
+        cfg.sim.contact_sensor_maxmatch = 500
     cfg.sim.mujoco.timestep = 1.0 / 50.0 / cfg.decimation
     cfg.sim.mujoco.iterations = 10
     cfg.sim.mujoco.ls_iterations = 20

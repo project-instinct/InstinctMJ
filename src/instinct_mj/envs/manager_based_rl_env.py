@@ -143,6 +143,10 @@ class InstinctRlEnv(ManagerBasedRlEnv):
 
         self._configure_gym_env_spaces()
 
+        # Initialize startup events if defined.
+        if "startup" in self.event_manager.available_modes:
+            self.event_manager.apply(mode="startup")
+
         self.monitor_manager = MonitorManager(self.cfg.monitors, self)
         print_info(f"[INFO] Monitor Manager: {self.monitor_manager}")
 
