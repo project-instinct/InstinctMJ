@@ -103,6 +103,7 @@ def _make_mesh_object_spec(mesh_file_path: str, scale: tuple[float, float, float
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname=mesh.name,
             mass=1.0,
+            group=2,
             rgba=(0.0, 0.8, 0.3, 1.0),
             friction=(1.0, 0.005, 0.0001),
         )

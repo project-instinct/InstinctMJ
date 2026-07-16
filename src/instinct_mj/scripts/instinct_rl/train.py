@@ -10,6 +10,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -35,6 +36,8 @@ from instinct_mj.utils.motion_validation import validate_tracking_motion_file
 
 
 def _to_yaml_data(data: Any) -> Any:
+    if isinstance(data, Enum):
+        return _to_yaml_data(data.value)
     if is_dataclass(data):
         return {item.name: _to_yaml_data(getattr(data, item.name)) for item in fields(data)}
     if isinstance(data, dict):
@@ -43,6 +46,8 @@ def _to_yaml_data(data: Any) -> Any:
         return [_to_yaml_data(value) for value in data]
     if isinstance(data, list):
         return [_to_yaml_data(value) for value in data]
+    if callable(data):
+        return f"{data.__module__}:{data.__qualname__}"
     if isinstance(data, (str, int, float, bool)) or data is None:
         return data
     return repr(data)
@@ -461,7 +466,7 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
     try:
         runner.learn(
             num_learning_iterations=cfg.agent.max_iterations,
-            init_at_random_ep_len=True,
+            init_at_random_ep_len=getattr(cfg.agent, "init_at_random_ep_len", False),
         )
     except KeyboardInterrupt:
         interrupt_name = handled_signal_name or "KeyboardInterrupt"
