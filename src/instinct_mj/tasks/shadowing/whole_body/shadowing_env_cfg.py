@@ -36,6 +36,7 @@ from instinct_mj.monitors import (
     ShadowingVelocityMonitorTerm,
     TorqueMonitorSensorCfg,
 )
+from instinct_mj.sensors.contact_sensor import ForceThresholdContactSensorCfg
 from instinct_mj.terrains.height_field import PerlinPlaneTerrainCfg
 
 
@@ -118,7 +119,7 @@ class ShadowingSceneCfg(SceneCfg):
 
     sensors: tuple[SensorCfg, ...] = field(
         default_factory=lambda: (
-            ContactSensorCfg(
+            ForceThresholdContactSensorCfg(
                 name="contact_forces",
                 primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
                 secondary=None,
@@ -126,6 +127,7 @@ class ShadowingSceneCfg(SceneCfg):
                 reduce="netforce",
                 history_length=3,
                 track_air_time=True,
+                force_threshold=1.0,
             ),
             ContactSensorCfg(
                 name="undesired_contact_forces",

@@ -31,6 +31,7 @@ from instinct_mj.assets.unitree_g1 import (
     beyondmimic_g1_29dof_actuator_cfgs,
 )
 from instinct_mj.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
+from instinct_mj.sensors.contact_sensor import ForceThresholdContactSensorCfg
 
 G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG
 
@@ -47,7 +48,7 @@ class G1LocomotionSceneCfg(SceneCfg):
     def __post_init__(self) -> None:
         robot_cfg = copy.deepcopy(G1_CFG)
         robot_cfg.articulation.actuators = copy.deepcopy(beyondmimic_g1_29dof_actuator_cfgs)
-        feet_contact_forces = ContactSensorCfg(
+        feet_contact_forces = ForceThresholdContactSensorCfg(
             name="feet_contact_forces",
             primary=ContactMatch(
                 mode="body",
@@ -58,6 +59,7 @@ class G1LocomotionSceneCfg(SceneCfg):
             fields=("found", "force"),
             reduce="netforce",
             track_air_time=True,
+            force_threshold=1.0,
             history_length=3,
         )
         base_contact_forces = ContactSensorCfg(
