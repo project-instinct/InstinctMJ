@@ -17,7 +17,6 @@ from mjlab.sensor import (
     GridPatternCfg,
     ObjRef,
     PinholeCameraPatternCfg,
-    RayCastSensorCfg,
     SensorCfg,
 )
 from mjlab.terrains import FlatPatchSamplingCfg
@@ -36,7 +35,7 @@ from instinct_mj.monitors import (
     ShadowingRotationMonitorTerm,
 )
 from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
-from instinct_mj.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
+from instinct_mj.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg, GroupedRayCasterCfg
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mj.tasks.shadowing import mdp as shadowing_mdp
 from instinct_mj.terrains.terrain_generator_cfg import FiledTerrainGeneratorCfg
@@ -217,18 +216,20 @@ class PerceptiveShadowingSceneCfg(SceneCfg):
             ContactSensorCfg(
                 name="contact_forces",
                 primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
-                secondary=ContactMatch(mode="body", pattern="terrain"),
+                secondary=None,
                 fields=("found", "force"),
                 reduce="netforce",
                 history_length=3,
                 track_air_time=True,
             ),
-            RayCastSensorCfg(
+            GroupedRayCasterCfg(
                 name="height_scanner",
                 frame=ObjRef(type="body", name="torso_link", entity="robot"),
                 pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
                 ray_alignment="yaw",
-                max_distance=30.0,
+                ray_origin_offset=(0.0, 0.0, 20.0),
+                max_distance=1e6,
+                include_geom_groups=(0,),
                 debug_vis=False,
             ),
             NoisyGroupedRayCasterCameraCfg(
@@ -302,7 +303,7 @@ def make_perceptive_scene_sensors(
         ContactSensorCfg(
             name="contact_forces",
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
-            secondary=ContactMatch(mode="body", pattern="terrain"),
+            secondary=None,
             fields=("found", "force"),
             reduce="netforce",
             history_length=3,
@@ -311,12 +312,14 @@ def make_perceptive_scene_sensors(
     ]
     if include_height_scanner:
         sensor_list.append(
-            RayCastSensorCfg(
+            GroupedRayCasterCfg(
                 name="height_scanner",
                 frame=ObjRef(type="body", name="torso_link", entity="robot"),
                 pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
                 ray_alignment="yaw",
-                max_distance=30.0,
+                ray_origin_offset=(0.0, 0.0, 20.0),
+                max_distance=1e6,
+                include_geom_groups=(0,),
                 debug_vis=False,
             )
         )
@@ -515,7 +518,7 @@ def make_observations() -> dict[str, ObsGroupCfg]:
         ),
         "height_scan": ObsTermCfg(
             func=mdp.height_scan,
-            params={"sensor_name": "height_scanner"},
+            params={"sensor_name": "height_scanner", "offset": 0.0, "miss_value": -20.0},
             clip=[-20.0, 20.0],
         ),
         "base_lin_vel": ObsTermCfg(

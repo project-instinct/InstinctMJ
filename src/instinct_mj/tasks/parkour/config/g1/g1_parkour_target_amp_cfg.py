@@ -275,7 +275,7 @@ def instinct_g1_parkour_amp_env_cfg(
         ContactSensorCfg(
             name="torso_contact_forces",
             primary=ContactMatch(mode="body", pattern="torso_link", entity="robot"),
-            secondary=ContactMatch(mode="body", pattern="terrain"),
+            secondary=None,
             fields=("found", "force"),
             reduce="netforce",
             track_air_time=False,

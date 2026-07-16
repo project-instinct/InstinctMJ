@@ -714,7 +714,7 @@ def g1_plane_shadowing_env_cfg(*, play: bool = False) -> shadowing_cfg.Shadowing
                         "right_wrist_yaw_link",
                     ),
                 ),
-                secondary=ContactMatch(mode="body", pattern="terrain"),
+                secondary=None,
                 fields=("found", "force"),
                 reduce="netforce",
                 num_slots=1,

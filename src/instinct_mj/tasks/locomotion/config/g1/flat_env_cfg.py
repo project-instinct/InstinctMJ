@@ -54,9 +54,9 @@ class G1LocomotionSceneCfg(SceneCfg):
                 pattern=("left_ankle_roll_link", "right_ankle_roll_link"),
                 entity="robot",
             ),
-            secondary=ContactMatch(mode="body", pattern="terrain"),
+            secondary=None,
             fields=("found", "force"),
-            reduce="maxforce",
+            reduce="netforce",
             track_air_time=True,
             history_length=3,
         )
@@ -74,9 +74,9 @@ class G1LocomotionSceneCfg(SceneCfg):
                 ),
                 entity="robot",
             ),
-            secondary=ContactMatch(mode="body", pattern="terrain"),
+            secondary=None,
             fields=("found", "force"),
-            reduce="maxforce",
+            reduce="netforce",
             track_air_time=False,
             history_length=3,
         )

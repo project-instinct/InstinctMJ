@@ -140,7 +140,7 @@ class BeyondMimicSceneCfg(SceneCfg):
                     ),
                     entity="robot",
                 ),
-                secondary=ContactMatch(mode="body", pattern="terrain"),
+                secondary=None,
                 fields=("found", "force"),
                 reduce="netforce",
                 history_length=3,

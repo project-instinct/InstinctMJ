@@ -82,7 +82,9 @@ class GroupedRayCaster(RayCastSensor):
         self._ALL_INDICES = torch.arange(self._num_envs, device=device, dtype=torch.long)
         self.drift = torch.zeros(self._num_envs, 3, device=device, dtype=torch.float32)
 
+        ray_origin_offset = torch.tensor(self.cfg.ray_origin_offset, device=device, dtype=torch.float32)
         self.ray_starts = self._local_offsets.unsqueeze(0).repeat(self._num_envs, 1, 1).clone()
+        self.ray_starts += ray_origin_offset
         self.ray_directions = self._local_directions.unsqueeze(0).repeat(self._num_envs, 1, 1).clone()
         ray_bodyexclude_torch = wp.to_torch(self._ray_bodyexclude)
         if ray_bodyexclude_torch.numel() > 0:
@@ -122,8 +124,8 @@ class GroupedRayCaster(RayCastSensor):
 
         self._cached_world_origins = world_origins
         self._cached_world_rays = ray_directions_w
-        self._cached_frame_pos = frame_pos
-        self._cached_frame_mat = frame_mat
+        self._cached_frame_pos = frame_pos.unsqueeze(1)
+        self._cached_frame_mat = frame_mat.unsqueeze(1)
 
     def _resolve_attachment_frame_metadata(
         self,

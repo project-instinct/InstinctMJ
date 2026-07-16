@@ -18,7 +18,6 @@ from mjlab.sensor import (
     GridPatternCfg,
     ObjRef,
     PinholeCameraPatternCfg,
-    RayCastSensorCfg,
     SensorCfg,
 )
 from mjlab.utils.noise import UniformNoiseCfg
@@ -36,6 +35,7 @@ from instinct_mj.monitors import (
     ShadowingRotationMonitorTerm,
 )
 from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
+from instinct_mj.sensors.grouped_ray_caster import GroupedRayCasterCfg
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mj.terrains.terrain_importer_cfg import TerrainImporterCfg
 from instinct_mj.utils.noise import (
@@ -181,12 +181,14 @@ def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCf
     ]
     if include_height_scanner:
         sensor_list.append(
-            RayCastSensorCfg(
+            GroupedRayCasterCfg(
                 name="height_scanner",
                 frame=ObjRef(type="body", name="torso_link", entity="robot"),
                 pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
                 ray_alignment="yaw",
-                max_distance=30.0,
+                ray_origin_offset=(0.0, 0.0, 20.0),
+                max_distance=1e6,
+                include_geom_groups=(0,),
                 debug_vis=False,
             )
         )
@@ -405,7 +407,7 @@ def make_hoi_observations() -> dict[str, ObsGroupCfg]:
         ),
         "height_scan": ObsTermCfg(
             func=mdp.height_scan,
-            params={"sensor_name": "height_scanner"},
+            params={"sensor_name": "height_scanner", "offset": 0.0, "miss_value": -20.0},
             clip=[-20.0, 20.0],
         ),
         "base_lin_vel": ObsTermCfg(
