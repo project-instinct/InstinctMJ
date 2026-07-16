@@ -418,11 +418,7 @@ class G1LocomotionFlatEnvCfg(InstinctLabRLEnvCfg):
                 f"_feetAirTime{feet_air_time.weight:.2f}" if feet_air_time is not None else "",
                 f"_standStill{-stand_still.weight:.2f}" if stand_still is not None else "",
                 f"_actionRate{-action_rate_l2.weight:.2f}" if action_rate_l2 is not None else "",
-                (
-                    f"_jointDeviationKnee{-joint_deviation_knee.weight:.2f}"
-                    if joint_deviation_knee is not None
-                    else ""
-                ),
+                (f"_jointDeviationKnee{-joint_deviation_knee.weight:.2f}" if joint_deviation_knee is not None else ""),
             ]
         )
 

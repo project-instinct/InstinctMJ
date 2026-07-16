@@ -36,6 +36,7 @@ htmlcov/
 
 # Scratch analysis / diagnostics / cluster job scripts (not part of source)
 .humanize/
+/AGENTS.md
 ARCHITECTURE.md
 PERF_ANALYSIS_CPU_GPU_SYNC.md
 diag_fix_test.py

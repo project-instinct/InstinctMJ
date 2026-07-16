@@ -94,9 +94,7 @@ motion_reference_cfg = MotionReferenceManagerCfg(
         MOTION_NAME: AmassMotionCfgBase(
             # NOTE: Replace this with your local BeyondMimic motion dataset root.
             # Example: os.path.expanduser("~/your/path/to/lafan1_gmr_unitree_g1_instinct")
-            path=os.path.expanduser(
-                "~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz"
-            ),
+            path=os.path.expanduser("~/Xyk/Datasets/UbisoftLAFAN1_GMR_g1_29dof_torsoBase_retargetted_instinctnpz"),
             retargetting_func=None,
             filtered_motion_selection_filepath=f"/tmp/{MOTION_NAME}.yaml",
             motion_start_from_middle_range=[0.0, 0.8],
