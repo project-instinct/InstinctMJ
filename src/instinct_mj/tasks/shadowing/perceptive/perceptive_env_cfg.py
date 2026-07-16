@@ -13,7 +13,6 @@ from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg
 from mjlab.sensor import (
     ContactMatch,
-    ContactSensorCfg,
     GridPatternCfg,
     ObjRef,
     PinholeCameraPatternCfg,
@@ -36,6 +35,7 @@ from instinct_mj.monitors import (
     ShadowingRotationMonitorTerm,
 )
 from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
+from instinct_mj.sensors.contact_sensor import ForceThresholdContactSensorCfg
 from instinct_mj.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mj.tasks.shadowing import mdp as shadowing_mdp
@@ -214,21 +214,24 @@ class PerceptiveShadowingSceneCfg(SceneCfg):
     # sensors
     sensors: tuple[SensorCfg, ...] = field(
         default_factory=lambda: (
-            ContactSensorCfg(
+            ForceThresholdContactSensorCfg(
                 name="contact_forces",
                 primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
-                secondary=ContactMatch(mode="body", pattern="terrain"),
-                fields=("found", "force"),
+                secondary=None,
+                fields=("force",),
                 reduce="netforce",
                 history_length=3,
                 track_air_time=True,
+                force_threshold=1.0,
             ),
             RayCastSensorCfg(
                 name="height_scanner",
                 frame=ObjRef(type="body", name="torso_link", entity="robot"),
                 pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
                 ray_alignment="yaw",
-                max_distance=30.0,
+                max_distance=5.0,
+                exclude_parent_body=True,
+                include_geom_groups=(0,),
                 debug_vis=False,
             ),
             NoisyGroupedRayCasterCameraCfg(
@@ -299,14 +302,15 @@ def make_perceptive_scene_sensors(
     """Build perceptive scene sensors without bridge fields."""
     # lights are applied in _edit_perceptive_scene_spec.
     sensor_list: list[SensorCfg] = [
-        ContactSensorCfg(
+        ForceThresholdContactSensorCfg(
             name="contact_forces",
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
-            secondary=ContactMatch(mode="body", pattern="terrain"),
-            fields=("found", "force"),
+            secondary=None,
+            fields=("force",),
             reduce="netforce",
             history_length=3,
             track_air_time=True,
+            force_threshold=1.0,
         )
     ]
     if include_height_scanner:
@@ -316,7 +320,9 @@ def make_perceptive_scene_sensors(
                 frame=ObjRef(type="body", name="torso_link", entity="robot"),
                 pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
                 ray_alignment="yaw",
-                max_distance=30.0,
+                max_distance=5.0,
+                exclude_parent_body=True,
+                include_geom_groups=(0,),
                 debug_vis=False,
             )
         )
@@ -976,3 +982,4 @@ class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
         self.sim.mujoco.ccd_iterations = 128
         self.sim.nconmax = 128
         self.sim.njmax = 512
+        self.sim.contact_sensor_maxmatch = 128

@@ -122,8 +122,8 @@ class GroupedRayCaster(RayCastSensor):
 
         self._cached_world_origins = world_origins
         self._cached_world_rays = ray_directions_w
-        self._cached_frame_pos = frame_pos
-        self._cached_frame_mat = frame_mat
+        self._cached_frame_pos = frame_pos.unsqueeze(1)
+        self._cached_frame_mat = frame_mat.unsqueeze(1)
 
     def _resolve_attachment_frame_metadata(
         self,

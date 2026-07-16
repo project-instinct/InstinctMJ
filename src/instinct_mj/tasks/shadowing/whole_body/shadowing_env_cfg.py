@@ -36,6 +36,7 @@ from instinct_mj.monitors import (
     ShadowingVelocityMonitorTerm,
     TorqueMonitorSensorCfg,
 )
+from instinct_mj.sensors.contact_sensor import ForceThresholdContactSensorCfg
 from instinct_mj.terrains.height_field import PerlinPlaneTerrainCfg
 
 
@@ -118,14 +119,15 @@ class ShadowingSceneCfg(SceneCfg):
 
     sensors: tuple[SensorCfg, ...] = field(
         default_factory=lambda: (
-            ContactSensorCfg(
+            ForceThresholdContactSensorCfg(
                 name="contact_forces",
                 primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
-                secondary=ContactMatch(mode="body", pattern="terrain"),
-                fields=("found", "force"),
-                reduce="maxforce",
+                secondary=None,
+                fields=("force",),
+                reduce="netforce",
                 history_length=3,
                 track_air_time=True,
+                force_threshold=1.0,
             ),
             ContactSensorCfg(
                 name="undesired_contact_forces",
@@ -140,8 +142,8 @@ class ShadowingSceneCfg(SceneCfg):
                         "right_wrist_yaw_link",
                     ),
                 ),
-                secondary=ContactMatch(mode="body", pattern="terrain"),
-                fields=("found", "force"),
+                secondary=None,
+                fields=("force",),
                 reduce="netforce",
                 num_slots=1,
                 history_length=3,
@@ -646,7 +648,7 @@ def make_monitors() -> dict[str, MonitorTermCfg]:
 class ShadowingEnvCfg(InstinctLabRLEnvCfg):
     """Configuration for the shadowing environment."""
 
-    scene: ShadowingSceneCfg = field(default_factory=lambda: ShadowingSceneCfg(num_envs=2048))
+    scene: ShadowingSceneCfg = field(default_factory=lambda: ShadowingSceneCfg(num_envs=4096))
     commands: dict = field(default_factory=make_commands)
     actions: dict = field(default_factory=make_actions)
     observations: dict = field(default_factory=make_observations)

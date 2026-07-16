@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from abc import abstractmethod
+from copy import deepcopy
 from typing import TYPE_CHECKING, Sequence
 
 import torch
@@ -81,7 +82,7 @@ class MonitorManager(ManagerBase):
     _env: ManagerBasedRlEnv
 
     def __init__(self, cfg, env: ManagerBasedRlEnv):
-        self.cfg = cfg
+        self.cfg = deepcopy(cfg)
         self._terms: dict[str, MonitorTerm | MonitorSensor] = dict()
         self._manager_owned_sensors: set[str] = set()
         super().__init__(env=env)
@@ -184,6 +185,9 @@ class MonitorManager(ManagerBase):
 
     def _prepare_terms(self):
         from .monitor_cfg import MonitorSensorCfg
+
+        if self.cfg is None:
+            return
 
         # check if config is dict already
         if isinstance(self.cfg, dict):

@@ -14,7 +14,6 @@ from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg
 from mjlab.sensor import (
     ContactMatch,
-    ContactSensorCfg,
     GridPatternCfg,
     ObjRef,
     PinholeCameraPatternCfg,
@@ -36,6 +35,7 @@ from instinct_mj.monitors import (
     ShadowingRotationMonitorTerm,
 )
 from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
+from instinct_mj.sensors.contact_sensor import ForceThresholdContactSensorCfg
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mj.terrains.terrain_importer_cfg import TerrainImporterCfg
 from instinct_mj.utils.noise import (
@@ -169,14 +169,15 @@ def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCf
     shared undesired_contacts / illegal_reset_contact terms rely on.
     """
     sensor_list: list[SensorCfg] = [
-        ContactSensorCfg(
+        ForceThresholdContactSensorCfg(
             name="contact_forces",
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
             # No secondary on purpose (see docstring).
-            fields=("found", "force"),
+            fields=("force",),
             reduce="netforce",
             history_length=3,
             track_air_time=True,
+            force_threshold=1.0,
         )
     ]
     if include_height_scanner:
@@ -186,7 +187,9 @@ def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCf
                 frame=ObjRef(type="body", name="torso_link", entity="robot"),
                 pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
                 ray_alignment="yaw",
-                max_distance=30.0,
+                max_distance=5.0,
+                exclude_parent_body=True,
+                include_geom_groups=(0,),
                 debug_vis=False,
             )
         )
@@ -879,6 +882,6 @@ class PerceptiveHoiShadowingEnvCfg(InstinctLabRLEnvCfg):
         # detection (HOI adds several object meshes the robot collides with), which reduces
         # spurious deep-penetration contact-force spikes at reset.
         self.sim.mujoco.ccd_iterations = 128
-        self.sim.nconmax = 128
+        self.sim.nconmax = 256
         self.sim.njmax = 512
-        self.sim.contact_sensor_maxmatch = 128
+        self.sim.contact_sensor_maxmatch = 256
