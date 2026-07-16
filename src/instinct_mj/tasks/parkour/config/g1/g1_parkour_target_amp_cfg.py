@@ -48,6 +48,7 @@ from instinct_mj.envs.manager_based_rl_env_cfg import InstinctLabRLEnvCfg
 from instinct_mj.motion_reference.motion_files.amass_motion_cfg import AmassMotionCfg as AmassMotionCfgBase
 from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
+from instinct_mj.sensors.contact_sensor import ForceThresholdContactSensorCfg
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mj.sensors.volume_points import Grid3dPointsGeneratorCfg, VolumePointsCfg
 from instinct_mj.tasks.parkour.config.parkour_env_cfg import (
@@ -260,7 +261,7 @@ def instinct_g1_parkour_amp_env_cfg(
     cfg.scene.spec_fn = _edit_parkour_scene_spec
     # Scene sensors
     cfg.scene.sensors = (
-        ContactSensorCfg(
+        ForceThresholdContactSensorCfg(
             name="contact_forces",
             primary=ContactMatch(
                 mode="body",
@@ -270,6 +271,7 @@ def instinct_g1_parkour_amp_env_cfg(
             fields=("found", "force"),
             reduce="netforce",
             track_air_time=True,
+            force_threshold=1.0,
             history_length=3,
         ),
         ContactSensorCfg(

@@ -14,7 +14,6 @@ from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg
 from mjlab.sensor import (
     ContactMatch,
-    ContactSensorCfg,
     GridPatternCfg,
     ObjRef,
     PinholeCameraPatternCfg,
@@ -36,6 +35,7 @@ from instinct_mj.monitors import (
     ShadowingRotationMonitorTerm,
 )
 from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
+from instinct_mj.sensors.contact_sensor import ForceThresholdContactSensorCfg
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mj.terrains.terrain_importer_cfg import TerrainImporterCfg
 from instinct_mj.utils.noise import (
@@ -169,7 +169,7 @@ def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCf
     shared undesired_contacts / illegal_reset_contact terms rely on.
     """
     sensor_list: list[SensorCfg] = [
-        ContactSensorCfg(
+        ForceThresholdContactSensorCfg(
             name="contact_forces",
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
             # No secondary on purpose (see docstring).
@@ -177,6 +177,7 @@ def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCf
             reduce="netforce",
             history_length=3,
             track_air_time=True,
+            force_threshold=1.0,
         )
     ]
     if include_height_scanner:
