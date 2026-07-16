@@ -19,8 +19,8 @@ from instinct_mj.assets.unitree_g1 import (
 )
 from instinct_mj.monitors import ActuatorMonitorTerm, MonitorTermCfg, ShadowingBasePosMonitorTerm
 from instinct_mj.motion_reference import HoiMotionReferenceData, HoiMotionReferenceState
-from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.motion_files.omomo_motion_cfg import OmomoMotionCfg as OmomoMotionCfgBase
+from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
 from instinct_mj.motion_reference.utils import motion_interpolate_bilinear
 
 G1_CFG = G1_29DOF_TORSOBASE_POPSICLE_CFG

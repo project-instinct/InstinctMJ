@@ -11,14 +11,7 @@ from mjlab.managers import RewardTermCfg as RewTermCfg
 from mjlab.managers import SceneEntityCfg
 from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg
-from mjlab.sensor import (
-    ContactMatch,
-    GridPatternCfg,
-    ObjRef,
-    PinholeCameraPatternCfg,
-    RayCastSensorCfg,
-    SensorCfg,
-)
+from mjlab.sensor import ContactMatch, GridPatternCfg, ObjRef, PinholeCameraPatternCfg, RayCastSensorCfg, SensorCfg
 from mjlab.terrains import FlatPatchSamplingCfg
 from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.utils.spec_config import MaterialCfg, TextureCfg

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import math
 from abc import abstractmethod
+from collections.abc import Sequence
 from copy import deepcopy
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import torch
 from mjlab.managers import ManagerBase, ManagerTermBase, SceneEntityCfg
