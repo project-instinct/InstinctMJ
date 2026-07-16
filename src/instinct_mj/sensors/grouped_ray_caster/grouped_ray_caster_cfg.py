@@ -13,9 +13,6 @@ class GroupedRayCasterCfg(RayCastSensorCfg):
 
     class_type: type = GroupedRayCaster
 
-    ray_origin_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    """Frame-local offset applied to every generated ray origin."""
-
     min_distance: float = 0.0
     """The minimum distance from the sensor to ray cast to. aka ignore the hits closer than this distance."""
 
