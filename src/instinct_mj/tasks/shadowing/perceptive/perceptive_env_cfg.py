@@ -218,7 +218,7 @@ class PerceptiveShadowingSceneCfg(SceneCfg):
                 name="contact_forces",
                 primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
                 secondary=None,
-                fields=("found", "force"),
+                fields=("force",),
                 reduce="netforce",
                 history_length=3,
                 track_air_time=True,
@@ -306,7 +306,7 @@ def make_perceptive_scene_sensors(
             name="contact_forces",
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
             secondary=None,
-            fields=("found", "force"),
+            fields=("force",),
             reduce="netforce",
             history_length=3,
             track_air_time=True,
@@ -982,3 +982,4 @@ class PerceptiveShadowingEnvCfg(InstinctLabRLEnvCfg):
         self.sim.mujoco.ccd_iterations = 128
         self.sim.nconmax = 128
         self.sim.njmax = 512
+        self.sim.contact_sensor_maxmatch = 128

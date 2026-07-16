@@ -173,7 +173,7 @@ def _make_hoi_base_sensors(include_height_scanner: bool = True) -> list[SensorCf
             name="contact_forces",
             primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
             # No secondary on purpose (see docstring).
-            fields=("found", "force"),
+            fields=("force",),
             reduce="netforce",
             history_length=3,
             track_air_time=True,
@@ -882,6 +882,6 @@ class PerceptiveHoiShadowingEnvCfg(InstinctLabRLEnvCfg):
         # detection (HOI adds several object meshes the robot collides with), which reduces
         # spurious deep-penetration contact-force spikes at reset.
         self.sim.mujoco.ccd_iterations = 128
-        self.sim.nconmax = 128
+        self.sim.nconmax = 256
         self.sim.njmax = 512
-        self.sim.contact_sensor_maxmatch = 128
+        self.sim.contact_sensor_maxmatch = 256
