@@ -12,14 +12,7 @@ from mjlab.managers import RewardTermCfg as RewTermCfg
 from mjlab.managers import SceneEntityCfg
 from mjlab.managers import TerminationTermCfg as DoneTermCfg
 from mjlab.scene import SceneCfg
-from mjlab.sensor import (
-    ContactMatch,
-    GridPatternCfg,
-    ObjRef,
-    PinholeCameraPatternCfg,
-    RayCastSensorCfg,
-    SensorCfg,
-)
+from mjlab.sensor import ContactMatch, GridPatternCfg, ObjRef, PinholeCameraPatternCfg, RayCastSensorCfg, SensorCfg
 from mjlab.utils.noise import UniformNoiseCfg
 from mjlab.utils.spec_config import MaterialCfg, TextureCfg
 
@@ -38,10 +31,7 @@ from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceMan
 from instinct_mj.sensors.contact_sensor import ForceThresholdContactSensorCfg
 from instinct_mj.sensors.noisy_camera import NoisyGroupedRayCasterCameraCfg
 from instinct_mj.terrains.terrain_importer_cfg import TerrainImporterCfg
-from instinct_mj.utils.noise import (
-    CropAndResizeCfg,
-    DepthNormalizationCfg,
-)
+from instinct_mj.utils.noise import CropAndResizeCfg, DepthNormalizationCfg
 
 # PROPRIO_HISTORY_LENGTH = 0
 PROPRIO_HISTORY_LENGTH = 8

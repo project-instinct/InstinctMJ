@@ -266,9 +266,7 @@ motion_reference_cfg = MotionReferenceManagerCfg(
             # path = os.path.expanduser("~/your/path/to/AMASS_SMPLX-NG_GMR_29dof_g1_torsoBase_retargetted_20250901_instinctnpz")
             # path = _path_
             # NOTE: Change this to the active local whole-body shadowing dataset root.
-            path=os.path.expanduser(
-                "~/Xyk/Datasets/NoKov-Marslab-Motions-instinctnpz/20251016_diveroll4_single"
-            ),
+            path=os.path.expanduser("~/Xyk/Datasets/NoKov-Marslab-Motions-instinctnpz/20251016_diveroll4_single"),
             retargetting_func=None,
             filtered_motion_selection_filepath=None,
             motion_start_from_middle_range=[0.0, 0.8],
