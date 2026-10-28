@@ -6,18 +6,17 @@
 [![instinct_rl](https://img.shields.io/badge/training-instinct__rl-brightgreen.svg)](https://github.com/project-instinct/instinct_rl)
 
 This branch trains the G1 perceptive shadowing parkour policy (`Instinct-Perceptive-Shadowing-G1-*`, depth camera) with
-**SuperMimic**: the simulator only collects data, one differentiable world model predicts the robot state and the visual latent of
-the policy's depth encoder, and the policy is trained by backpropagation through 32-step imagined rollouts. No PPO. InstinctMJ is
-the `mjlab` port of [InstinctLab](https://github.com/project-instinct/InstinctLab) ([Project-Instinct](https://project-instinct.github.io/)).
+**SuperMimic**: the simulator only collects data, a differentiable world model predicts the robot state, and the policy is trained
+by backpropagation through 32-step imagined rollouts. No PPO. The depth image is not imagined: at every imagined state it is
+rendered from the known scene by differentiable ray casting (MuJoCo Warp), so the policy's depth encoder is trained end to end.
+InstinctMJ is the `mjlab` port of [InstinctLab](https://github.com/project-instinct/InstinctLab)
+([Project-Instinct](https://project-instinct.github.io/)).
 
-![world model](src/instinct_mj/rl/supermimic/assets/world_model_simple.png)
+![method](src/instinct_mj/rl/supermimic/assets/method.png)
 
-One RTX 3090, 1024 environments: **97% success** on the 10 motions of the released dataset (diveroll, knee climb onto a 50 cm
-step, jump-sit, roll vault) after 8000 iterations (3.2 h). Method, results and configuration:
+One RTX 3090, 1024 environments: **95% success** on the 10 motions of the released dataset (diveroll, knee climb onto a 50 cm
+step, jump-sit, roll vault) after 8000 iterations (2.8 h). Method, results and configuration:
 [src/instinct_mj/rl/supermimic/README.md](src/instinct_mj/rl/supermimic/README.md).
-
-The same method also trains the goal-reaching parkour policy (`Instinct-Parkour-Target-Amp-SuperMimic-G1-*`: depth camera,
-target point, AMP style reward): terrain curriculum level about 6 (of 0–9), and about 90% of the 20 s episodes end without a fall after 8.4 h.
 
 ## Installation
 
@@ -36,7 +35,8 @@ Download from the [SuperMimic release](https://github.com/project-instinct/Insti
 
 - `20251116_50cm_kneeClimbStep1.zip`: the dataset. Unzip into `~/Datasets/` (the default `MOTION_FOLDER` in
   `src/instinct_mj/tasks/shadowing/perceptive/config/g1/perceptive_shadowing_cfg.py`).
-- The trained policy checkpoint, its ONNX export and the world-model state (to resume training).
+- The trained policy checkpoint and its ONNX export. The world-model state in the release belongs to the earlier visual-latent
+  version and cannot be resumed with this code.
 
 ## Usage
 
@@ -52,16 +52,6 @@ uv run instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --checkpoint-file 
 ```
 
 Runs are written to `logs/instinct_rl/g1_perceptive_shadowing/`.
-
-Parkour (motion reference for the style reward in `~/Xyk/Datasets/data&model/parkour_motion_reference`, see
-`src/instinct_mj/tasks/parkour/README.md`); `instinct-train` cannot parse the parkour env cfg, so use the launcher:
-
-```bash
-uv run python -m instinct_mj.scripts.supermimic.train_parkour --num-envs 1024 --agent.max-iterations 40000
-uv run python webplay_parkour_supermimic.py <run>/model_<it>.pt
-```
-
-Runs are written to `logs/instinct_rl/g1_parkour_supermimic/`.
 
 ## Acknowledgements
 

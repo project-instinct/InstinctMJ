@@ -38,7 +38,7 @@ with torch.no_grad():
 
 # ---- determinism: fixed starts, no stochastic noise, no optimizer steps ----
 runner.mdp.goal_noise.zero_(), runner.mdp.proprio_noise.zero_()
-runner.depth_pipe.noise_stages = []
+runner.depth_pipe.noised = runner.depth_pipe.clean  # no stochastic camera noise in the rendered images
 starts = runner.sample_valid_starts(cfg.pi_batch)
 runner.sample_valid_starts = lambda B: starts
 runner.opt_pi.step = lambda *a, **k: None

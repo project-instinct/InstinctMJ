@@ -3,8 +3,9 @@ actor.
 
 Adapted from the SuperMimic reference implementation (MIT License), Chong Zhang / ETH Zurich.
 Task-specific changes: the world model also takes the local terrain height scan, predicts per-body contact logits (used for
-the ``undesired_contacts`` reward) and carries the visual latent z of the policy's depth encoder as part of its state, so
-the depth policy can be trained in imagination without rendering images.
+the ``undesired_contacts`` reward) and, optionally (``z_dim > 0``), carries the visual latent z of the policy's depth
+encoder as part of its state, so the depth policy can be trained in imagination without rendering images. Without z
+(``z_dim = 0``, the default) the state is the robot state only and the depth images are rendered (``render.py``).
 """
 
 from __future__ import annotations
@@ -80,9 +81,10 @@ def run_mlp(net: nn.Module, x: torch.Tensor) -> torch.Tensor:
 class WorldModel(nn.Module):
     """Deterministic dynamics (s_{t+1}, z_{t+1}) = f(s_t, z_t, a_t, xi, terrain scan): one MLP predicts the frame-local
     state increments, the logits of the per-body contact indicators at s_{t+1} and the increment of the visual latent z
-    (the latent of the policy's depth encoder). z is normalized with running statistics kept here (``update_z_stats``)."""
+    (the latent of the policy's depth encoder). z is normalized with running statistics kept here (``update_z_stats``).
+    With ``z_dim = 0`` there is no latent: ``step`` takes ``z=None`` and returns ``None`` in its place."""
 
-    def __init__(self, scan_dim: int, num_contact: int, xi_dim: int, z_dim: int, hidden=(2048, 2048, 2048)):
+    def __init__(self, scan_dim: int, num_contact: int, xi_dim: int, z_dim: int = 0, hidden=(2048, 2048, 2048)):
         super().__init__()
         self.in_dim = INV_DIM + NUM_J + xi_dim + scan_dim
         self.num_contact, self.z_dim = num_contact, z_dim
@@ -127,10 +129,12 @@ class WorldModel(nn.Module):
             -1,
         )
 
-    def step(self, S, a, xi_n, scan, z):
-        """Returns the next state tuple, the contact logits at the next state and the next visual latent."""
+    def step(self, S, a, xi_n, scan, z=None):
+        """Returns the next state tuple, the contact logits at the next state and the next visual latent (None if
+        ``z_dim = 0``)."""
         p, R, v, w, q, qd = S
-        y = run_mlp(self.net, torch.cat((self.in_norm(self.inputs(S, a, xi_n, scan)), (z - self.z_mean) / self.z_std), -1))
+        x = self.in_norm(self.inputs(S, a, xi_n, scan))
+        y = run_mlp(self.net, x if self.z_dim == 0 else torch.cat((x, (z - self.z_mean) / self.z_std), -1))
         d = y[..., :WM_OUT] * self.out_norm.std() + self.out_norm.mean
         H = yaw_mat(R)
         dp, dth, dv, dw, dq, dqd = d.split((3, 3, 3, 3, NUM_J, NUM_J), -1)
@@ -138,7 +142,7 @@ class WorldModel(nn.Module):
         R1 = mm(R, so3_exp(dth))
         v1 = v + mv(R, dv)
         w1 = w + mv(R, dw)
-        z1 = z + y[..., WM_OUT + self.num_contact :] * self.dz_std
+        z1 = None if self.z_dim == 0 else z + y[..., WM_OUT + self.num_contact :] * self.dz_std
         return (p1, R1, v1, w1, q + dq, qd + dqd), y[..., WM_OUT : WM_OUT + self.num_contact], z1
 
     @staticmethod

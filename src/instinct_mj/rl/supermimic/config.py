@@ -40,7 +40,7 @@ class SuperMimicRunnerCfg:
     wm_only_iters: int = 500
     """World-model-only iterations at the start, no policy update (default 500)."""
 
-    # ---- visual latent (part of the world-model state) ----
+    # ---- visual latent (part of the world-model state; used by the parkour runner only, perceptive shadowing renders the images) ----
     latent_windows: int = 2048
     """Windows (of ``wm_batch``) on which the k-step latent prediction loss is computed; every window still rolls out with
     its latent (the dynamics take it as input), only the target images of these are encoded (default 2048)."""
@@ -104,6 +104,9 @@ class SuperMimicRunnerCfg:
     """bf16 autocast of the actor MLP in imagination only; collection / play stay fp32 (default False)."""
     checkpoint_imagination: bool = False
     """Gradient checkpointing of every imagination step (recompute in backward): less memory, more compute (default False)."""
+    render_robot: bool = True
+    """Imagined depth images include the robot's own links (self-occlusion, as the env camera); False = terrain only, which is
+    slightly cheaper per imagination step (default True)."""
     heightmap_resolution: float = 0.05
     """Resolution [m] of the global terrain heightmap used by the analytic height scan (default 0.05)."""
     heightmap_cache_dir: str = "~/.cache/instinct_mj/supermimic_heightmaps"

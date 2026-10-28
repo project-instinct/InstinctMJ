@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import torch
 
-from .mdp import DEPTH_SHAPE, NUM_J, STATE_DIM
+from .mdp import NUM_J, STATE_DIM
 
 
 class ReplayBuffer:
     # fields returned by ``sample_windows`` / ``starts_at`` (start state and its observation history)
-    window_keys = ("s", "s1", "a", "contact", "done", "depth", "depth1", "depth1_clean", "terminated", "f1", "phase1", "origin1")
-    start_keys = ("s", "a_prev", "f", "phase", "origin", "depth")
+    window_keys = ("s", "s1", "a", "contact", "done", "terminated", "f1", "phase1", "origin1")
+    start_keys = ("s", "a_prev", "f", "phase", "origin")
     hist_keys = ("s", "a_prev")
 
     def __init__(self, T: int, N: int, num_contact: int, device: str, holdout_envs: float = 0.0, fields: dict | None = None):
@@ -42,9 +42,6 @@ class ReplayBuffer:
             "origin1": (3, torch.float32),
             "terminated": ((), torch.bool),  # the transition ended in a REAL termination (not a timeout / dataset end)
             "phase": ((), torch.float32),  # fractional reference time at s (see MotionLib.current_frame)
-            "depth": (DEPTH_SHAPE, torch.float16),  # the env's (noised) processed policy ``depth_image`` at s
-            "depth1": (DEPTH_SHAPE, torch.float16),  # the env's (noised) policy ``depth_image`` at s1 (pre-reset): latent target
-            "depth1_clean": (DEPTH_SHAPE, torch.float16),  # CLEAN processed depth image at s1 (pre-reset): reconstruction target
             "ep_step": ((), torch.int32),
             "done": ((), torch.bool),
         }

@@ -8,6 +8,9 @@ pose, contacts against the terrain), and re-runs the pinned envs with the tracki
 
     .venv/bin/python tests/supermimic/diagnose_failure.py <run>/model_4000.pt --motion-folder ~/Datasets/20251116_50cm_kneeClimbStep1
 Small GPU job (16 envs).
+
+Written for checkpoints of the visual-latent design (commit 4c4a836: ``encode_depth``, ``z_dim``, ``latent_dec`` in the sidecar);
+not ported yet to the rendered-depth runner, whose world model has no latent.
 """
 
 from __future__ import annotations
