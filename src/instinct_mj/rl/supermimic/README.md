@@ -1,5 +1,13 @@
 # SuperMimic world-model training for perceptive shadowing parkour (G1)
 
+> **Variant: render** (branches `supermimic-render` / `supermimic`). The world model predicts the robot state only and every imagined
+> step renders the depth image by ray casting. The other variant, **latent** (branch `supermimic-latent`), puts the visual latent z of
+> the policy's depth encoder into the world-model state, predicts it, and renders no image in imagination.
+>
+> Results (success / link pos / joint pos error): latent 96.9% / 0.044 m / 0.134 rad at iteration 8000 (128 episodes); render 93.8% /
+> 0.047 m / 0.139 rad at iteration 8000 (`pi_batch` 1024). Render + value head (no annealing): 93.1% at 6000 and 87.4% at 8000 vs
+> render alone 74.2% / 91.0% (3 seeds x 256 envs); the annealed run is in progress.
+
 Trains the depth policy of `Instinct-Perceptive-Shadowing-G1-v0` inside a learned world model, following
 [SuperMimic](https://arxiv.org/abs/2610.28480) (Liao et al., CoRL 2026) and its open reproduction
 [supermimic_vibed](https://github.com/zita-ch/supermimic_vibed) (MIT, Chong Zhang).
@@ -70,9 +78,26 @@ fused re-implementation (about 10x faster than the sensor's functions, numerical
 distributions for the random ones, `python tests/supermimic/check_depth_noise.py`), followed by normalize + crop / resize,
 so the policy sees the observation format of the env. Gradient w.r.t. the pose by the implicit function trick: hit distance and
 surface normal n from the kernel (no gradient), `t = n·(x* − o)/(n·d)` with gradient on the ray origin o and direction d (zero for
-hits on the robot's own links). E is the policy's depth encoder (exported as `0-depth_image.onnx`) and is trained by the policy loss
-through this path. All 27 x 48 rays are needed: the output pixels depend on the raw pixels within 2 px (contour, blur) and the
+hits on the robot's own links). E is the policy's depth encoder (exported as `0-depth_image.onnx`); by default it is trained by the
+policy loss through this path (see **Encoder training** for the alternatives). All 27 x 48 rays are needed: the output pixels depend on the raw pixels within 2 px (contour, blur) and the
 too-close stage on whole columns. The whole cast sequence runs in one CUDA graph without host syncs.
+
+**Encoder training.** Trained by the BPTT policy gradient alone (the default), E degrades below a randomly initialized encoder: linear
+probes of its feature on real depth images (terrain class, wall / no wall, kneel progress) are all lower than for random weights. Three
+flags replace that signal, all training-only (the exported policy is unchanged):
+
+- `--agent.encoder-policy-grad 0`: the actor sees the detached feature, E receives no policy gradient.
+- `--agent.aux-recon-weight 1.0`: a decoder reconstructs the clean depth image from E(noised image) of 2048 real buffered states per
+  iteration (L1); during the world-model-only iterations E is pre-trained by it alone.
+- `--agent.aux-value-weight 1.0`: a value head on the actor's own input (proprioception, commands, E(depth)) regresses the critic's
+  GAE target of the imagined states, a task signal for E. It speeds up learning a lot (93% vs 74% success at iteration 6000, 3 seeds)
+  but lowers the final precision if kept on (87% vs 91% at 8000), so it is annealed to 0 with `--agent.aux-value-anneal-start` /
+  `--agent.aux-value-anneal-end` (as in Kickstarting).
+
+```bash
+instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.max-iterations 8000 --agent.encoder-policy-grad 0 \
+    --agent.aux-recon-weight 1.0 --agent.aux-value-weight 1.0 --agent.aux-value-anneal-start 3000 --agent.aux-value-anneal-end 6000
+```
 
 **Failure head** (optional, on by default): a continue predictor on privileged features, combined with the analytic soft
 termination in imagination, `d = 1 − (1 − d_analytic)(1 − p_fail)`.
@@ -120,6 +145,8 @@ All fields are in `config.py` (`SuperMimicRunnerCfg`, part of the task's agent c
 | `lr`, `lr_decay_iters`, `lr_final_ratio` | 2e-4, 250000, 0.03 | Learning rate and cosine decay |
 | `amp`, `compile`, `compile_policy` | `bf16`, True, True | bf16 MLPs, `torch.compile` of the world model and the imagination step |
 | `render_robot` | True | Imagined depth images include the robot's own links (self-occlusion) |
+| `encoder_policy_grad`, `aux_recon_weight` | 1.0, 0 | Policy-gradient scale into the depth encoder, reconstruction loss weight (see **Encoder training**) |
+| `aux_value_weight`, `aux_value_anneal_start`, `aux_value_anneal_end` | 0, -1, -1 | Value-head loss into the depth encoder and its linear annealing to 0 |
 | `checkpoint_imagination` | False | Gradient checkpointing of the imagination (less memory, more time) |
 
 ## Performance

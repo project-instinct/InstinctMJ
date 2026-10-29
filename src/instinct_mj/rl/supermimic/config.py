@@ -50,6 +50,40 @@ class SuperMimicRunnerCfg:
     """Images per world-model batch for the clean-image reconstruction loss that trains the policy's depth encoder (default 512)."""
     latent_recon_weight: float = 1.0
     """Weight of the reconstruction (L1) loss (default 1.0)."""
+    latent_policy_grad: float = 0.0
+    """Scale of the policy gradient into the depth encoder E: at the first imagination step the actor sees z0 = E(real
+    image) with this gradient scale (the value is unchanged), so the policy loss also trains E, next to the reconstruction.
+    The world model's own z0 stays detached from E. 0 = E is trained by the reconstruction only (default 0)."""
+
+    # ---- plan D: the depth encoder is trained by a reconstruction loss on real images, the policy gradient into it is scaled / stopped ----
+    encoder_policy_grad: float = 1.0
+    """Scale of the BPTT policy gradient into the policy's depth encoder E: the actor MLP is fed the encoder feature
+    ``f.detach() + s * (f - f.detach())`` (the value is unchanged). 1 = the previous behavior (``act_inference``), 0 = the actor sees
+    the detached feature, E receives no policy gradient (default 1.0)."""
+    aux_recon_weight: float = 0.0
+    """Weight of the reconstruction loss that trains E: a training-only decoder (``networks.LatentDecoder``) reconstructs the CLEAN
+    processed depth image from E(noised image, normalized as the policy input); L1. The images are rendered from
+    ``aux_recon_images`` REAL buffered states per update (a noised and a clean version of one raw measurement). The gradient updates
+    only E and the decoder (own Adam; the decoder is training-only), is added to E's policy gradient after the policy gradient's
+    clipping, after a global-norm clip of its own (1.0); during the world-model-only iterations E is trained by it alone.
+    0 = off: no decoder, no extra computation, the previous behavior (default 0)."""
+    aux_recon_images: int = 2048
+    """Real buffered states rendered (and noised / cleaned) per reconstruction update (default 2048)."""
+    aux_value_weight: float = 0.0
+    """Weight of the auxiliary value loss that gives E a task signal: a training-only head (``networks.ValueHead``) on the actor's own
+    input (the policy observation without the depth slice, and E(depth image)) regresses the critic's GAE(lambda) target of the same
+    imagined state (detached, normalized by running statistics); MSE. The gradient updates only E and the head (own Adam), is added to
+    E's gradient after the policy gradient's clipping, after a global-norm clip of its own (1.0), like ``aux_recon_weight``. Requires
+    the critic. 0 = off: no head, no extra computation, the previous behavior (default 0)."""
+    aux_value_images: int = 8192
+    """Imagined states (a random subset of ``aux_value_images // horizon`` per imagination step) that enter the value loss per policy
+    update (default 8192)."""
+    aux_value_anneal_start: int = -1
+    """Iteration from which ``aux_value_weight`` is annealed linearly to 0 (Kickstarting-style): the value loss speeds up learning early
+    but keeps moving E's features late, which costs final tracking precision. -1 = constant weight (default -1)."""
+    aux_value_anneal_end: int = -1
+    """Iteration at which the annealed ``aux_value_weight`` reaches 0; after it the head is no longer trained (no extra computation)
+    (default -1)."""
 
     # ---- failure head ----
     fail_head: bool = True
@@ -107,6 +141,10 @@ class SuperMimicRunnerCfg:
     render_robot: bool = True
     """Imagined depth images include the robot's own links (self-occlusion, as the env camera); False = terrain only, which is
     slightly cheaper per imagination step (default True)."""
+    render_state_grad: bool = True
+    """Keep the gradient of the rendered depth image w.r.t. the predicted state (implicit-function gradient through the hit
+    normals); False = the image is still rendered from the predicted state but detached from it (stop-gradient), so the encoder
+    and actor are trained through the actions only (default True)."""
     heightmap_resolution: float = 0.05
     """Resolution [m] of the global terrain heightmap used by the analytic height scan (default 0.05)."""
     heightmap_cache_dir: str = "~/.cache/instinct_mj/supermimic_heightmaps"

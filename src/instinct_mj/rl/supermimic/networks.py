@@ -198,6 +198,20 @@ class FailureHead(nn.Module):
         return run_mlp(self.net, self.norm(x)).squeeze(-1)
 
 
+class ValueHead(nn.Module):
+    """Training-only value head on the actor's input (policy observation without the depth slice, and the depth encoder's feature):
+    regresses the critic's GAE target (auxiliary loss, see ``SuperMimicRunnerCfg.aux_value_weight``). Not part of the exported policy."""
+
+    def __init__(self, in_dim: int):
+        super().__init__()
+        self.target_norm = RunningNorm(1)
+        self.net = mlp(in_dim, [256, 128], 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalized value prediction (B,) (in units of ``target_norm``)."""
+        return self.net(x).squeeze(-1)
+
+
 class Critic(nn.Module):
     def __init__(self, in_dim: int):
         super().__init__()

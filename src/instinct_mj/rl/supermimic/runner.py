@@ -33,14 +33,14 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
-from instinct_rl.utils.utils import get_subobs_size, store_code_state
+from instinct_rl.utils.utils import get_obs_slice, get_subobs_size, store_code_state
 from tensorboardX import SummaryWriter
 
 from . import networks
 from .buffer import ReplayBuffer
 from .depth import DepthPipeline
 from .mdp import DEPTH_DIM, flatten_state, unflatten_state
-from .networks import Critic, FailureHead, WorldModel
+from .networks import Critic, FailureHead, LatentDecoder, ValueHead, WorldModel
 from .render import DepthRenderer
 from .sim import SimReader, build_mdp
 
@@ -130,6 +130,21 @@ class SuperMimicRunner:
         self.fail_head = FailureHead(self.mdp.critic_dim()).to(device)
         self.opt_fail = torch.optim.Adam(self.fail_head.parameters(), lr=c["lr"])
         self.fail_head_start_it = 0  # iteration at which the head was created (a resume may create it later)
+        # the depth block that ``EncoderActorCritic`` runs on the depth slice of the policy observation
+        self.depth_enc = self.ac.encoders._parallel_blocks["depth_image"]
+        self.depth_sl, self.depth_shape = get_obs_slice(self.ac.obs_segments, "depth_image")
+        self.recon_dec = self.opt_recon = None
+        if c["aux_recon_weight"] > 0:
+            # training-only decoder of the output feature of the depth encoder to the clean processed image
+            self.recon_dec = LatentDecoder(self.ac.encoders.block_configs["depth_image"]["output_size"]).to(device)
+            self.opt_recon = torch.optim.Adam(self.recon_dec.parameters(), lr=c["lr"])
+        self.value_head = self.opt_value = None
+        if c["aux_value_weight"] > 0:
+            assert not c["no_critic"], "aux_value_weight needs the critic (its GAE targets)"
+            # training-only head on the actor's own input (policy observation without the depth slice, E(depth image))
+            in_dim = self.pol_norm.mean.numel() - (self.depth_sl.stop - self.depth_sl.start) + self.ac.encoders.block_configs["depth_image"]["output_size"]
+            self.value_head = ValueHead(in_dim).to(device)
+            self.opt_value = torch.optim.Adam(self.value_head.parameters(), lr=c["lr"])
         self.err_floor = ERR_FLOOR.to(device)
         self.buffer = ReplayBuffer(c["buffer_steps"], self.N, self.K, device, c["wm_holdout_envs"])
         self.obs, _ = env.get_observations()  # real flat policy observation (post-reset)
@@ -174,6 +189,7 @@ class SuperMimicRunner:
             return wm.inputs(S, a, xi_n, mdp.scan(S, noisy=False)), wm.targets(S, S1), mdp.reward(S1, f1, origin1, a, a_prev, xi, contact)
 
         ac, pol_norm, policy_autocast = self.ac, self.pol_norm, self.cfg["policy_autocast"]
+        encoder_policy_grad = self.cfg["encoder_policy_grad"]
 
         def _imag_obs(S, depth, o_hist, f, phase):
             """Normalized policy observation in the env's format with the rendered ``depth`` (B, DEPTH_DIM) of the state."""
@@ -193,7 +209,7 @@ class SuperMimicRunner:
             elementwise work before and after it is compiled."""
             obs = _imag_obs(S, depth, o_hist, f, phase)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=policy_autocast):  # training imagination only
-                a = ac.act_inference(obs).float()
+                a = (ac.act_inference(obs) if encoder_policy_grad == 1.0 else self.act_encoder_scaled(obs, encoder_policy_grad)).float()
             return _imag_next(S, a, o_hist, xi, xi_n, scan)
 
         def _rays(p, R, env):
@@ -210,7 +226,7 @@ class SuperMimicRunner:
             _reward_term, _critic_input = (torch.compile(fn, dynamic=True) for fn in (_reward_term, _critic_input))
             _imag_obs, _imag_next, _sim_stats = torch.compile(_imag_obs), torch.compile(_imag_next), torch.compile(_sim_stats)
             _rays, _depth = torch.compile(_rays), torch.compile(_depth)  # around the (uncompiled) warp ray cast
-        self.wm_rollout, self.wm_err, self.rays_fn, self.depth_fn = _wm_rollout, _wm_err, _rays, _depth
+        self.wm_rollout, self.wm_err, self.rays_fn, self.depth_fn, self.imag_obs = _wm_rollout, _wm_err, _rays, _depth, _imag_obs
         self.reward_term, self.critic_input, self.imag_core, self.sim_stats = _reward_term, _critic_input, _imag_core, _sim_stats
 
     def rollout(self, w: dict, xi_n):
@@ -223,7 +239,23 @@ class SuperMimicRunner:
         normalization and crop / resize."""
         o, d, forward = self.rays_fn(S[0], S[1], env_idx)
         dist, n, geomid = self.renderer.scene.cast(S[0], S[1], S[4], o.detach(), d.detach())
+        if not self.cfg["render_state_grad"]:  # the image as an input only: no gradient into the predicted state
+            o, d, forward = o.detach(), d.detach(), forward.detach()
         return self.depth_fn(o, d, forward, dist, n, geomid)
+
+    def act_encoder_scaled(self, obs, scale: float) -> torch.Tensor:
+        """``ac.act_inference(obs)`` with the depth encoder's feature computed explicitly and fed to the actor MLP as
+        ``f.detach() + scale * (f - f.detach())`` (the same value; the policy gradient into the encoder is scaled by ``scale``, 0 =
+        none: the encoder then runs without a graph). The actor input is in the format ``ParallelLayer`` gives it: the observation
+        without the depth slice (taken out), then the feature."""
+        image = obs[:, self.depth_sl].reshape(-1, *self.depth_shape)
+        if scale == 0.0:
+            with torch.no_grad():
+                f = self.depth_enc(image)
+        else:
+            f = self.depth_enc(image)
+            f = f.detach() + scale * (f - f.detach())
+        return self.ac.actor(torch.cat((obs[:, : self.depth_sl.start], obs[:, self.depth_sl.stop :], f), -1))
 
     def lr_at(self, it: int) -> float:
         c = self.cfg
@@ -424,10 +456,20 @@ class SuperMimicRunner:
             o_hist = o_hist + noise.gather(1, h["slot"].unsqueeze(-1).expand_as(noise))
         S0, f0, scan = S, f, mdp.scan(S, noisy=False)
         Ss, As, Aps, Fs, Ls = [], [], [], [], []
-        for _ in range(HZ):
+        Dlog = []  # detached images of a few steps for the encoder activation statistics (logging only)
+        value = self.value_head is not None and torch.is_grad_enabled() and self.aux_value_scale() > 0
+        Vo, Vt, Vi = [], [], []  # detached policy observations of a random subset of the states, their step and indices (aux value loss)
+        for t in range(HZ):
             Aps.append(a_prev)
             # policy observation in EXACTLY the env's policy-group format, with the rendered (noised) depth image of S
-            step_args = (S, self.render_depth(S, env_idx), o_hist, f, phase, xi, xi_n, scan)
+            depth = self.render_depth(S, env_idx)
+            if torch.is_grad_enabled() and t in (0, HZ // 2, HZ - 1):
+                Dlog.append(depth.detach())
+            if value:
+                idx = torch.randperm(S[0].shape[0], device=self.device)[: c["aux_value_images"] // HZ]
+                with torch.no_grad():
+                    Vo.append(self.imag_obs(tuple(x[idx] for x in S), depth[idx], o_hist[idx], f[idx], phase[idx])), Vt.append(t), Vi.append(idx)
+            step_args = (S, depth, o_hist, f, phase, xi, xi_n, scan)
             if c["checkpoint_imagination"] and torch.is_grad_enabled():
                 # recompute the step in the backward pass instead of keeping its activations (same RNG state is replayed)
                 a_prev, S, logits, scan, o_hist = torch.utils.checkpoint.checkpoint(self.imag_core, *step_args, use_reentrant=False)
@@ -435,7 +477,126 @@ class SuperMimicRunner:
                 a_prev, S, logits, scan, o_hist = self.imag_core(*step_args)
             f = f + 1
             Ss.append(S), As.append(a_prev), Fs.append(f), Ls.append(logits)
-        return {"S0": S0, "f0": f0, "S": S, "f": f, "phase": phase, "origin": origin, "xi": xi, "xi_n": xi_n, "Ss": Ss, "As": As, "Aps": Aps, "Fs": Fs, "Ls": Ls}
+        return {"S0": S0, "f0": f0, "S": S, "f": f, "phase": phase, "origin": origin, "xi": xi, "xi_n": xi_n, "Ss": Ss, "As": As, "Aps": Aps, "Fs": Fs, "Ls": Ls, "Dlog": Dlog, "Vo": Vo, "Vt": Vt, "Vi": Vi}
+
+    def normalize_depth(self, depth: torch.Tensor) -> torch.Tensor:
+        """The depth slice of the policy observation normalized as ``pol_norm`` does (images (B, DEPTH_DIM))."""
+        norm = self.pol_norm
+        return (depth - norm.mean[self.depth_sl]) / (norm.std[self.depth_sl] + norm.eps)
+
+    @torch.no_grad()
+    def encoder_diagnostics(self, Dlog, grads: bool = True) -> dict:
+        """Logging only (no effect on training): per activation layer of the depth encoder E (conv1, conv2, head1, head2) the number of
+        units never active over the imagined images and the mean positive fraction, and the PRE-clip gradient norms of E and of
+        the actor MLP (call after the policy loss' backward, before the clipping; ``grads`` False: the activation statistics only)."""
+        h = self.normalize_depth(torch.cat(Dlog)).reshape(-1, *self.depth_shape)
+        out, names = {}, iter(("conv1", "conv2", "head1", "head2"))
+        for m in (*self.depth_enc.conv.conv, nn.Flatten(), *self.depth_enc.head.model):
+            h = m(h)
+            if isinstance(m, (nn.ReLU, nn.LeakyReLU)):
+                name, active = next(names), h > 0
+                out[f"enc_act/{name}/never_active_units"] = (~active.transpose(0, 1).flatten(1).any(1)).sum().float()
+                out[f"enc_act/{name}/positive_fraction"] = active.float().mean()
+        if grads:
+            gnorm = lambda params: torch.linalg.vector_norm(torch.stack([p.grad.norm() for p in params]))  # noqa: E731
+            out["grad_norm_pre_clip/encoder"] = gnorm(self.depth_enc.parameters())
+            out["grad_norm_pre_clip/actor_mlp"] = gnorm(self.ac.actor.parameters())
+        return out
+
+    def render_recon_images(self):
+        """``aux_recon_images`` REAL buffered states (uniform over the buffer and the training envs), each rendered once: the noised
+        policy observation of the image (B, DEPTH_DIM) and the CLEAN processed image of the same raw measurement (B, 1, 18, 32)."""
+        n, buf = self.cfg["aux_recon_images"], self.buffer
+        age = torch.randint(0, buf.size, (n,), device=self.device)
+        env = torch.randint(*buf.train_envs, (n,), device=self.device)
+        S = unflatten_state(buf.data["s"][buf._row(age), env])
+        with torch.no_grad():
+            raw = self.renderer.render(S[0], S[1], S[4], env)
+            return self.depth_pipe.noised(raw).flatten(1), self.depth_pipe.clean(raw)
+
+    def aux_recon_loss(self, noised, clean):
+        """Reconstruction loss of the policy's depth encoder E: L1 of the decoder on E(noised image, normalized as in the policy
+        observation) vs the clean processed image."""
+        pred = self.recon_dec(self.depth_enc(self.normalize_depth(noised).reshape(-1, *self.depth_shape)))
+        l1 = (pred - clean).abs().mean()
+        with torch.no_grad():
+            baseline = (clean - clean.mean(0)).abs().mean()  # L1 of the per-pixel mean image
+        return l1, {"loss": l1.detach(), "baseline_l1": baseline}
+
+    def aux_recon_step(self, noised, clean) -> dict:
+        """Gradient step of the reconstruction loss: the decoder has its own optimizer; E's gradient (global-norm clipped on its own, so
+        that neither signal rescales the other) is added to E's gradient (policy gradient, already clipped, if any) before the
+        optimizer of E (``opt_pi``) steps."""
+        loss, stats = self.aux_recon_loss(noised, clean)
+        enc_params, dec_params = list(self.depth_enc.parameters()), list(self.recon_dec.parameters())
+        grads = torch.autograd.grad(self.cfg["aux_recon_weight"] * loss, enc_params + dec_params)
+        norm = torch.linalg.vector_norm(torch.stack([g.norm() for g in grads]))
+        stats["dec_grad_norm"] = torch.linalg.vector_norm(torch.stack([g.norm() for g in grads[len(enc_params) :]]))
+        stats["enc_grad_norm"] = torch.linalg.vector_norm(torch.stack([g.norm() for g in grads[: len(enc_params)]]))
+        if torch.isfinite(norm):
+            scale = (1.0 / (norm + 1e-6)).clamp(max=1.0)
+            for p, g in zip(enc_params, grads):
+                p.grad = scale * g if p.grad is None else p.grad + scale * g
+            for p, g in zip(dec_params, grads[len(enc_params) :]):
+                p.grad = scale * g
+            self.opt_recon.step()
+        return stats
+
+    def aux_value_scale(self) -> float:
+        """Factor on ``aux_value_weight`` at the current iteration: 1 before ``aux_value_anneal_start``, linear to 0 at
+        ``aux_value_anneal_end``, 0 after (the head is then no longer trained); always 1 with the default start -1."""
+        start, end = self.cfg["aux_value_anneal_start"], self.cfg["aux_value_anneal_end"]
+        if start < 0 or self.it < start:
+            return 1.0
+        return max(0.0, 1.0 - (self.it - start) / max(end - start, 1))
+
+    def aux_value_loss(self, obs, target):
+        """Value loss of the policy's depth encoder E and the value head: MSE of the head on the actor's input (policy observation without
+        the depth slice, E(depth image of the observation, already normalized)) vs the critic's GAE target, normalized by running
+        statistics."""
+        sl = self.depth_sl
+        f = self.depth_enc(obs[:, sl].reshape(-1, *self.depth_shape))
+        pred = self.value_head(torch.cat((obs[:, : sl.start], obs[:, sl.stop :], f), -1))
+        norm = self.value_head.target_norm
+        norm.update(target.unsqueeze(-1))
+        with torch.no_grad():
+            y = norm(target.unsqueeze(-1)).squeeze(-1)
+        mse = ((pred - y) ** 2).mean()
+        with torch.no_grad():
+            r2 = 1 - mse / y.var(unbiased=False).clamp(min=1e-8)
+        return mse, {"loss": mse.detach(), "r2": r2}
+
+    def aux_value_step(self, Vo, Vt, Vi, targets) -> dict:
+        """Gradient step of the value loss: the head has its own optimizer; E's gradient (global-norm clipped on its own, so that neither
+        signal rescales the other) is added to E's gradient (policy gradient, already clipped, if any) before the optimizer of E
+        (``opt_pi``) steps."""
+        obs = torch.cat(Vo)
+        target = torch.cat([targets[t, i] for t, i in zip(Vt, Vi)])
+        loss, stats = self.aux_value_loss(obs, target)
+        enc_params, head_params = list(self.depth_enc.parameters()), list(self.value_head.parameters())
+        scale_w = self.aux_value_scale()
+        grads = torch.autograd.grad(self.cfg["aux_value_weight"] * scale_w * loss, enc_params + head_params)
+        norm = torch.linalg.vector_norm(torch.stack([g.norm() for g in grads]))
+        stats["weight_scale"] = torch.tensor(scale_w)
+        stats["head_grad_norm"] = torch.linalg.vector_norm(torch.stack([g.norm() for g in grads[len(enc_params) :]]))
+        stats["enc_grad_norm"] = torch.linalg.vector_norm(torch.stack([g.norm() for g in grads[: len(enc_params)]]))
+        if torch.isfinite(norm):
+            scale = (1.0 / (norm + 1e-6)).clamp(max=1.0)
+            for p, g in zip(enc_params, grads):
+                p.grad = scale * g if p.grad is None else p.grad + scale * g
+            for p, g in zip(head_params, grads[len(enc_params) :]):
+                p.grad = scale * g
+            self.opt_value.step()
+        return stats
+
+    def recon_warmup_update(self, log: bool):
+        """World-model-only iterations: E is trained by the reconstruction loss alone (``opt_pi`` steps only E, the other parameters
+        have no gradient). Returns the loss statistics and, if ``log``, the encoder activation statistics of the noised images."""
+        noised, clean = self.render_recon_images()
+        self.opt_pi.zero_grad(set_to_none=True)
+        stats = self.aux_recon_step(noised, clean)
+        self.opt_pi.step()
+        return stats, self.encoder_diagnostics([noised], grads=False) if log else {}
 
     def policy_update(self):
         """One policy step: H-step imagination from buffer states, BPTT of the discounted return, then GAE critic fit."""
@@ -472,15 +633,13 @@ class SuperMimicRunner:
         loss = -J.mean()
         self.opt_pi.zero_grad(set_to_none=True)
         loss.backward()
+        if c["encoder_policy_grad"] == 0.0:
+            for p_ in self.depth_enc.parameters():  # the actor saw the detached feature (computed without a graph): exactly zero gradient
+                p_.grad = torch.zeros_like(p_)
+        diag = self.encoder_diagnostics(im["Dlog"]) if (self.it + 1) % c["log_interval"] == 0 else {}
         gn = nn.utils.clip_grad_norm_(self.ac.parameters(), 1.0)
         nn.utils.clip_grad_value_(self.ac.parameters(), 0.1)
-        if torch.isfinite(gn):
-            self.opt_pi.step()
-        for m_ in frozen:
-            for p_ in m_.parameters():
-                p_.requires_grad_(True)
-        # ---------------- critic: GAE(lambda) targets over the imagined transitions ----------------
-        v_loss = torch.zeros((), device=dev)
+        # GAE(lambda) targets over the imagined transitions (detached data, the critic before its fit: independent of the policy step)
         if not c["no_critic"]:
             with torch.no_grad():
                 S_c = tuple(torch.cat((S0[i].unsqueeze(0), torch.stack([St[i].detach() for St in Ss])), 0).flatten(0, 1) for i in range(6))
@@ -496,6 +655,16 @@ class SuperMimicRunner:
                     R = rews[t] + c["gamma"] * (1 - dones[t]) * ((1 - c["lam"]) * V[t + 1] + c["lam"] * R)
                     targets.append(R)
                 targets = torch.stack(targets[::-1])  # (H, B)
+        recon_stats = self.aux_recon_step(*self.render_recon_images()) if self.recon_dec is not None else {}
+        value_stats = self.aux_value_step(im["Vo"], im["Vt"], im["Vi"], targets) if im["Vo"] else {}
+        if torch.isfinite(gn):
+            self.opt_pi.step()
+        for m_ in frozen:
+            for p_ in m_.parameters():
+                p_.requires_grad_(True)
+        # ---------------- critic: GAE(lambda) targets over the imagined transitions ----------------
+        v_loss = torch.zeros((), device=dev)
+        if not c["no_critic"]:
             Xf, Yf = X[:-1].reshape(-1, X.shape[-1]), targets.reshape(-1)
             n = Xf.shape[0]
             mb = n // c["critic_minibatches"]
@@ -510,7 +679,7 @@ class SuperMimicRunner:
                     self.opt_v.step()
         term_means = {k: v.detach().view(HZ, B).mean() for k, v in terms.items()}
         term_means["p_fail_mean"] = p_fail_mean
-        return loss.detach(), v_loss.detach(), (r_sum / HZ / mdp.dt).mean(), gn.detach(), cT.mean().detach(), term_means
+        return loss.detach(), v_loss.detach(), (r_sum / HZ / mdp.dt).mean(), gn.detach(), cT.mean().detach(), term_means, recon_stats, value_stats, diag
 
     # ------------------------------------------------------------------------------------------------
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False):
@@ -528,10 +697,13 @@ class SuperMimicRunner:
         step_acc = 0.0
         agg: dict[str, list] = {k: [] for k in ("wm", "wm8", "bce", "fail_loss", "fail_batch_pos", "pi", "v", "ir", "gn", "surv")}
         terms_acc: dict[str, list] = {}
+        recon_acc: dict[str, list] = {}
+        value_acc: dict[str, list] = {}
+        diag_acc: dict[str, list] = {}
         while self.it < num_learning_iterations:
             it = self.it
             lr = self.lr_at(it)
-            for o in (self.opt_wm, self.opt_pi, self.opt_v, self.opt_fail):
+            for o in (self.opt_wm, self.opt_pi, self.opt_v, self.opt_fail, *([self.opt_recon] if self.opt_recon is not None else []), *([self.opt_value] if self.opt_value is not None else [])):
                 for gparam in o.param_groups:
                     gparam["lr"] = lr
             step_acc += 1.0 / c["utd"]
@@ -542,11 +714,23 @@ class SuperMimicRunner:
                 m = self.wm_update()
             for k_ in ("wm", "wm8", "bce", "fail_loss", "fail_batch_pos"):
                 agg[k_].append(m[k_])
+            if it < c["wm_only_iters"] and self.recon_dec is not None:
+                recon_stats, diag = self.recon_warmup_update((it + 1) % c["log_interval"] == 0)
+                for k, v in recon_stats.items():
+                    recon_acc.setdefault(k, []).append(v)
+                for k, v in diag.items():
+                    diag_acc.setdefault(k, []).append(v)
             if it >= c["wm_only_iters"]:
-                pl, vl, ir, gn, surv, terms = self.policy_update()
+                pl, vl, ir, gn, surv, terms, recon_stats, value_stats, diag = self.policy_update()
+                for k, v in recon_stats.items():
+                    recon_acc.setdefault(k, []).append(v)
+                for k, v in value_stats.items():
+                    value_acc.setdefault(k, []).append(v)
                 agg["pi"].append(pl), agg["v"].append(vl), agg["ir"].append(ir), agg["gn"].append(gn), agg["surv"].append(surv)
                 for k, v in terms.items():
                     terms_acc.setdefault(k, []).append(v)
+                for k, v in diag.items():
+                    diag_acc.setdefault(k, []).append(v)
             self.it += 1
             if self.it % c["log_interval"] == 0:
                 mean = lambda x: float(sum(float(v) for v in x) / len(x)) if len(x) else float("nan")  # noqa: E731
@@ -570,20 +754,32 @@ class SuperMimicRunner:
                         row.update(self.termination_check())
                 for k, v in terms_acc.items():
                     row[f"imagination/reward_term/{k}"] = mean(v)
+                for k, v in recon_acc.items():
+                    row[f"aux_recon/{k}"] = mean(v)
+                for k, v in value_acc.items():
+                    row[f"aux_value/{k}"] = mean(v)
+                row.update({k: mean(v) for k, v in diag_acc.items()})
                 if self.writer is not None:
                     for k, v in row.items():
                         if not math.isnan(v):
                             self.writer.add_scalar(k, v, self.it)
                     self.writer.flush()
+                aux_str = ""
+                if recon_acc:
+                    aux_str += f"| rec {row['aux_recon/loss']:.4f} (mean-img {row['aux_recon/baseline_l1']:.4f}) "
+                if value_acc:
+                    aux_str += f"| val {row['aux_value/loss']:.4f} R2 {row['aux_value/r2']:.3f} "
+                if diag_acc:
+                    aux_str += "| dead conv1/conv2/head1/head2 " + "/".join(f"{row[f'enc_act/{n}/never_active_units']:.0f}" for n in ("conv1", "conv2", "head1", "head2")) + " "
                 print(f"it {self.it} | {wall_h:.3f} h | wm {row['wm/loss']:.4f} e8 {row['wm/err_8step']:.4f} bce {row['wm/contact_bce']:.4f} "
                       f"| render mae {row['render/clean_mae']:.4f} | pi {row['policy/loss']:.3f} v {row['critic/value_loss']:.4f} "
                       f"imag_r {row['imagination/reward']:.3f} surv {row['imagination/survival']:.3f} | sim_r {row['sim/reward']:.3f} "
                       f"gap {row['sim/analytic_reward_abs_gap']:.4f} ep_len {row['sim/episode_length']:.1f} term {term_frac:.2f} "
-                      f"| {ips:.2f} it/s mem {row['perf/max_mem_gb']:.1f}G", flush=True)  # fmt: skip
+                      f"{aux_str}| {ips:.2f} it/s mem {row['perf/max_mem_gb']:.1f}G", flush=True)  # fmt: skip
                 t_log = time.time()
                 stats = {k: [] for k in stats}
                 agg = {k: [] for k in agg}
-                terms_acc = {}
+                terms_acc, recon_acc, value_acc, diag_acc = {}, {}, {}, {}
             if self.it % c["save_interval"] == 0 or self.it == num_learning_iterations:
                 self.wall_offset = time.time() - t_start
                 self.save(os.path.join(self.log_dir, f"model_{self.it}.pt"))
@@ -616,6 +812,8 @@ class SuperMimicRunner:
             "wall_time": self.wall_offset, "sim_steps": self.sim_steps, "cfg": self.cfg,
             "xi_mean": self.mdp.xi_mean, "xi_scale": self.mdp.xi_scale,
             "fail_head": self.fail_head.state_dict(), "opt_fail": self.opt_fail.state_dict(), "fail_head_start_it": self.fail_head_start_it,
+            **({"recon_dec": self.recon_dec.state_dict(), "opt_recon": self.opt_recon.state_dict()} if self.recon_dec is not None else {}),
+            **({"value_head": self.value_head.state_dict(), "opt_value": self.opt_value.state_dict()} if self.value_head is not None else {}),
         }, self._sidecar(path))  # fmt: skip
 
     def load(self, path: str):
@@ -656,6 +854,10 @@ class SuperMimicRunner:
         else:
             self.fail_head.load_state_dict(ck["fail_head"]), self.opt_fail.load_state_dict(ck["opt_fail"])
             self.fail_head_start_it = ck["fail_head_start_it"]
+        if self.recon_dec is not None:
+            self.recon_dec.load_state_dict(ck["recon_dec"]), self.opt_recon.load_state_dict(ck["opt_recon"])
+        if self.value_head is not None:
+            self.value_head.load_state_dict(ck["value_head"]), self.opt_value.load_state_dict(ck["opt_value"])
 
     def train_mode(self) -> None:
         """Training mode of the policy and the normalizers (``OnPolicyRunner.train_mode``)."""

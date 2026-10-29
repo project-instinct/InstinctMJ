@@ -102,6 +102,15 @@ class ParkourSuperMimicRunner:
     def normalize_policy_obs(self, obs: torch.Tensor) -> torch.Tensor:
         return self.pol_norm(obs) if self.pol_norm is not None else obs
 
+    def start_latent(self, depth: torch.Tensor):
+        """Latent of the start depth stack for the world model (detached) and for the actor at the first imagination step
+        (with the gradient into E scaled by ``latent_policy_grad``, same value)."""
+        coef = self.cfg["latent_policy_grad"]
+        with torch.set_grad_enabled(coef > 0 and torch.is_grad_enabled()):
+            z0 = self.encode_depth(depth)
+        z = z0.detach()
+        return z, (z + coef * (z0 - z) if coef > 0 else z)
+
     def encode_depth(self, depth: torch.Tensor) -> torch.Tensor:
         """Latent of the policy's depth encoder for depth stacks (B, *DEPTH_SHAPE) in [0, 1], normalized as in the policy
         observation (the encoder sees exactly what it sees in ``act_inference``)."""
@@ -219,12 +228,13 @@ class ParkourSuperMimicRunner:
         ac, policy_autocast, d0 = self.ac, self.cfg["policy_autocast"], self.depth_slice.start
         normalize = self.normalize_policy_obs
 
-        def _imag_core(S, z, o_hist, amp_hist, timers, a_prev, cmd, xi, scan):
+        def _imag_core(S, z, z_pi, o_hist, amp_hist, timers, a_prev, cmd, xi, scan):
             """One imagination step: actor on the policy observation with the latent in place of the encoder output
-            (stop-gradient), world-model step (z is a world-model state), feet timers, proprio and amp histories."""
+            (``z_pi``: detached, except at the first step with ``latent_policy_grad``), world-model step (z is a world-model
+            state), feet timers, proprio and amp histories."""
             obs = normalize(mdp.policy_obs(o_hist, z.new_zeros(z.shape[0], *DEPTH_SHAPE)))
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=policy_autocast):
-                a = ac.actor(torch.cat((obs[:, :d0], obs[:, d0 + self.depth_dim :], z.detach()), -1)).float()
+                a = ac.actor(torch.cat((obs[:, :d0], obs[:, d0 + self.depth_dim :], z_pi), -1)).float()
             a = torch.clamp(a, -20, 20)
             S1, logits, z1 = wm.step(S, a, torch.cat((xi, a_prev), -1), scan, z)
             timers1 = mdp.advance_feet_timers(timers, torch.sigmoid(logits[:, :2]))
@@ -397,19 +407,20 @@ class ParkourSuperMimicRunner:
         S = unflatten_state(s["s"])
         cmd, env_idx = s["cmd"], s["env"]
         xi_n = self.episode_context(s["lags"], self.fr_n[env_idx])
+        z, z_pi = self.start_latent(s["depth"].float() / DEPTH_SCALE)
         with torch.no_grad():
-            z = self.encode_depth(s["depth"].float() / DEPTH_SCALE)
             o_hist, amp_hist = self.history(h)
         timers, a_prev = s["timers"], s["a_prev"]
         S0, scan = S, self.mdp.scan(S)
         Ss, S_prev, As, Aps, Ls, Ts, Amps = [], [], [], [], [], [], []
         for _ in range(HZ):
             S_prev.append(S), Aps.append(a_prev)
-            args = (S, z, o_hist, amp_hist, timers, a_prev, cmd, xi_n, scan)
+            args = (S, z, z_pi, o_hist, amp_hist, timers, a_prev, cmd, xi_n, scan)
             if c["checkpoint_imagination"] and torch.is_grad_enabled():
                 a_prev, S, z, logits, timers, o_hist, amp_hist, scan = torch.utils.checkpoint.checkpoint(self.imag_core, *args, use_reentrant=False)
             else:
                 a_prev, S, z, logits, timers, o_hist, amp_hist, scan = self.imag_core(*args)
+            z_pi = z.detach()
             Ss.append(S), As.append(a_prev), Ls.append(logits), Ts.append(timers), Amps.append(amp_hist)
         return {"S0": S0, "S": S, "cmd": cmd, "xi_n": xi_n, "timers": timers, "Ss": Ss, "S_prev": S_prev, "As": As, "Aps": Aps,
                 "Ls": Ls, "Ts": Ts, "Amps": Amps, "timers0": s["timers"]}  # fmt: skip

@@ -124,6 +124,20 @@ def build_eval_cfg(args: EvalArgs, num_envs: int, render: bool = False):
     return cfg, [m["motion_file"] for m in metadata["motion_files"]]
 
 
+def load_agent_dict(args: EvalArgs) -> dict:
+    """The task's agent cfg, with the ``policy`` network cfg of the run that produced the checkpoint (``<run>/params/agent.yaml``,
+    written by ``instinct-train``) so that runs with a non-default network (e.g. another encoder nonlinearity) are rebuilt as
+    trained; checkpoints outside a run dir keep the task's network."""
+    agent_cfg = load_instinct_rl_cfg(PLAY_TASK)
+    agent_cfg.device = args.device
+    d = agent_cfg.to_dict()
+    params = Path(args.run_dir or Path(args.checkpoint).parent).expanduser() / "params" / "agent.yaml"
+    if params.is_file():
+        with open(params, encoding="utf-8") as f:
+            d["policy"] = yaml.safe_load(f)["policy"]
+    return d
+
+
 class Evaluator:
     def __init__(self, args: EvalArgs):
         self.args = args
@@ -134,12 +148,11 @@ class Evaluator:
                 f"num_envs={args.num_envs} < {args.min_episodes_per_motion} x {self.K} motions: not every motion would get "
                 f"{args.min_episodes_per_motion} episodes."
             )
-        self.agent_cfg = load_instinct_rl_cfg(PLAY_TASK)
-        self.agent_cfg.device = args.device
+        agent_dict = load_agent_dict(args)
         env = load_env_cls(PLAY_TASK)(cfg=cfg, device=args.device, render_mode=None)
         self.vec = load_vecenv_cls(PLAY_TASK)(env, policy_group="policy", critic_group="critic")
         self.env = self.vec.unwrapped
-        self.runner = load_runner_cls(PLAY_TASK)(self.vec, self.agent_cfg.to_dict(), log_dir=None, device=args.device)
+        self.runner = load_runner_cls(PLAY_TASK)(self.vec, agent_dict, log_dir=None, device=args.device)
         self.dt = self.env.step_dt
         self.mgr = self.env.scene["motion_reference"]
         self.buffer = next(iter(self.mgr.motion_buffers.values()))
@@ -263,12 +276,11 @@ def choose_camera(env, buffer, motion_index: int, args: EvalArgs) -> tuple[float
 def record_videos(args: EvalArgs, checkpoint: str, folder: Path) -> None:
     """One episode per motion with the existing mjlab ``VideoRecorder`` on a single-env render env."""
     cfg, motion_files = build_eval_cfg(args, 1, render=True)
-    agent_cfg = load_instinct_rl_cfg(PLAY_TASK)
-    agent_cfg.device = args.device
+    agent_dict = load_agent_dict(args)
     env = load_env_cls(PLAY_TASK)(cfg=cfg, device=args.device, render_mode="rgb_array")
     buffer = next(iter(env.scene["motion_reference"].motion_buffers.values()))
     vec0 = load_vecenv_cls(PLAY_TASK)(env, policy_group="policy", critic_group="critic")
-    runner = load_runner_cls(PLAY_TASK)(vec0, agent_cfg.to_dict(), log_dir=None, device=args.device)
+    runner = load_runner_cls(PLAY_TASK)(vec0, agent_dict, log_dir=None, device=args.device)
     runner.load(checkpoint)
     policy = runner.get_inference_policy(device=args.device)
     for k, name in enumerate(motion_files):

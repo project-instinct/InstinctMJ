@@ -50,5 +50,21 @@ else:
         raise FileNotFoundError(f"No SuperMimic run matches {RUNS_GLOB}; pass a checkpoint path.")
     CKPT = max(glob.glob(f"{runs[-1]}/model_*.pt"), key=lambda p: int(re.search(r"model_(\d+)", p).group(1)))
 print(f"[webplay] checkpoint: {CKPT}", flush=True)
+
+_real_rl_cfg = playmod.load_instinct_rl_cfg
+
+
+def _patched_rl_cfg(task_id):
+    # the depth encoder as trained: its nonlinearity from the run's params/agent.yaml (written by instinct-train)
+    cfg = _real_rl_cfg(task_id)
+    params = os.path.join(os.path.dirname(CKPT), "params", "agent.yaml")
+    if os.path.isfile(params):
+        with open(params, encoding="utf-8") as f:
+            enc = yaml.safe_load(f)["policy"]["encoder_configs"]["depth_image"]
+        cfg.policy.encoder_configs.depth_image.nonlinearity = enc["nonlinearity"]
+    return cfg
+
+
+playmod.load_instinct_rl_cfg = _patched_rl_cfg
 cfg = PlayConfig(viewer="viser", num_envs=1, checkpoint_file=CKPT)
 run_play("Instinct-Perceptive-Shadowing-G1-v0", cfg)
