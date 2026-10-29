@@ -40,7 +40,16 @@ class SuperMimicRunnerCfg:
     wm_only_iters: int = 500
     """World-model-only iterations at the start, no policy update (default 500)."""
 
-    # ---- visual latent (part of the world-model state; used by the parkour runner only, perceptive shadowing renders the images) ----
+    # ---- vision method of the perceptive shadowing trainer ----
+    vision: str = "render"
+    """How the depth image enters the imagination of perceptive shadowing, "render" or "latent". "render": the world model predicts
+    the robot state only and the depth image of every imagined state is rendered (``render.py``); the policy's own network acts on it
+    and its depth encoder E is trained through the policy loss (plan D / ``aux_*`` below). "latent": the world-model state also
+    carries the latent z of E, the world model predicts it (``latent_*`` below), E is trained by a reconstruction decoder only and
+    nothing is rendered in imagination; the buffer stores depth images. "latent" excludes ``encoder_policy_grad`` != 1,
+    ``aux_recon_weight`` > 0, ``aux_value_weight`` > 0 and ``latent_policy_grad`` != 0 (default "render")."""
+
+    # ---- visual latent (part of the world-model state; ``vision="latent"`` and the parkour runner) ----
     latent_windows: int = 2048
     """Windows (of ``wm_batch``) on which the k-step latent prediction loss is computed; every window still rolls out with
     its latent (the dynamics take it as input), only the target images of these are encoded (default 2048)."""
@@ -53,7 +62,8 @@ class SuperMimicRunnerCfg:
     latent_policy_grad: float = 0.0
     """Scale of the policy gradient into the depth encoder E: at the first imagination step the actor sees z0 = E(real
     image) with this gradient scale (the value is unchanged), so the policy loss also trains E, next to the reconstruction.
-    The world model's own z0 stays detached from E. 0 = E is trained by the reconstruction only (default 0)."""
+    The world model's own z0 stays detached from E. 0 = E is trained by the reconstruction only (parkour runner only;
+    perceptive shadowing requires 0) (default 0)."""
 
     # ---- plan D: the depth encoder is trained by a reconstruction loss on real images, the policy gradient into it is scaled / stopped ----
     encoder_policy_grad: float = 1.0

@@ -1,12 +1,26 @@
 # SuperMimic world-model training for perceptive shadowing parkour (G1)
 
-> **Variant: render** (branches `supermimic-render` / `supermimic`). The world model predicts the robot state only and every imagined
-> step renders the depth image by ray casting. The other variant, **latent** (branch `supermimic-latent`), puts the visual latent z of
-> the policy's depth encoder into the world-model state, predicts it, and renders no image in imagination.
->
-> Results (success / link pos / joint pos error): latent 96.9% / 0.044 m / 0.134 rad at iteration 8000 (128 episodes); render 93.8% /
-> 0.047 m / 0.139 rad at iteration 8000 (`pi_batch` 1024). Render + value head (no annealing): 93.1% at 6000 and 87.4% at 8000 vs
-> render alone 74.2% / 91.0% (3 seeds x 256 envs); the annealed run is in progress.
+**Two vision methods** (`--agent.vision latent | render`, default `render`). Both share the world model, critic, failure head and
+the task's policy; they differ in how the depth image enters imagination. `render`: the world model predicts the robot state only and
+every imagined step renders the depth image of the predicted state by ray casting; the policy's own depth encoder E acts on it.
+`latent`: the world-model state also carries the latent z of E, the world model predicts it, E is trained by a reconstruction
+decoder and nothing is rendered in imagination (the buffer stores depth images instead). Results (success / link pos / joint pos
+error): latent 96.9% / 0.044 m / 0.134 rad at iteration 8000 (128 episodes, original run); render + plan D (see **Encoder training**)
+93.8% / 0.047 m / 0.139 rad; render + plan D + value head (no annealing) 93.1% at 6000 and 87.4% at 8000 vs plan D alone 74.2% / 91.0%
+(3 seeds x 256 envs).
+
+```bash
+# latent (the setting of the 96.9% run)
+instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.max-iterations 8000 --agent.vision latent \
+    --agent.fail-head False --agent.wm-failure-frac 0 --agent.wm-holdout-envs 0
+# render (plan D + annealed value head)
+instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.max-iterations 8000 --agent.encoder-policy-grad 0 \
+    --agent.aux-recon-weight 1.0 --agent.aux-value-weight 1.0 --agent.aux-value-anneal-start 3000 --agent.aux-value-anneal-end 6000
+```
+
+`latent` excludes `encoder_policy_grad` != 1, `aux_recon_weight` > 0, `aux_value_weight` > 0 and `latent_policy_grad` != 0 (they act on
+the rendered path; setting them raises a `ValueError`); `render` ignores the `latent_*` fields. The rest of this README describes
+the `render` method.
 
 Trains the depth policy of `Instinct-Perceptive-Shadowing-G1-v0` inside a learned world model, following
 [SuperMimic](https://arxiv.org/abs/2610.28480) (Liao et al., CoRL 2026) and its open reproduction
@@ -144,6 +158,7 @@ All fields are in `config.py` (`SuperMimicRunnerCfg`, part of the task's agent c
 | `gamma`, `lam`, `action_noise` | 0.99, 0.95, 0.1 | Discount, GAE λ, collection action noise |
 | `lr`, `lr_decay_iters`, `lr_final_ratio` | 2e-4, 250000, 0.03 | Learning rate and cosine decay |
 | `amp`, `compile`, `compile_policy` | `bf16`, True, True | bf16 MLPs, `torch.compile` of the world model and the imagination step |
+| `vision` | `render` | `render` or `latent` (see the top of this README); `latent_windows`, `latent_weight`, `latent_recon_images`, `latent_recon_weight` are the `latent` method's fields |
 | `render_robot` | True | Imagined depth images include the robot's own links (self-occlusion) |
 | `encoder_policy_grad`, `aux_recon_weight` | 1.0, 0 | Policy-gradient scale into the depth encoder, reconstruction loss weight (see **Encoder training**) |
 | `aux_value_weight`, `aux_value_anneal_start`, `aux_value_anneal_end` | 0, -1, -1 | Value-head loss into the depth encoder and its linear annealing to 0 |

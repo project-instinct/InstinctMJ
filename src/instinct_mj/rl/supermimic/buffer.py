@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import torch
 
-from .mdp import NUM_J, STATE_DIM
+from .mdp import DEPTH_SHAPE, NUM_J, STATE_DIM
 
 
 class ReplayBuffer:
@@ -21,10 +21,11 @@ class ReplayBuffer:
     start_keys = ("s", "a_prev", "f", "phase", "origin")
     hist_keys = ("s", "a_prev")
 
-    def __init__(self, T: int, N: int, num_contact: int, device: str, holdout_envs: float = 0.0, fields: dict | None = None):
+    def __init__(self, T: int, N: int, num_contact: int, device: str, holdout_envs: float = 0.0, fields: dict | None = None, depth: bool = False):
         """``holdout_envs``: fraction of the envs (the last ones) that is never sampled for training (``train_envs``) and
         only used for held-out diagnostics (``holdout_envs`` range). ``fields``: {name: (shape, dtype)} of a transition
-        (default: the perceptive shadowing fields below); a task with other fields also sets the ``*_keys`` above."""
+        (default: the perceptive shadowing fields below); a task with other fields also sets the ``*_keys`` above. ``depth`` (default
+        fields only): also store the env's depth images (the visual latent of ``vision="latent"``)."""
         self.T, self.N, self.device = T, N, device
         n_hold = int(N * holdout_envs)
         self.train_envs, self.holdout_envs = (0, N - n_hold), ((N - n_hold, N) if n_hold > 0 else (0, N))
@@ -45,6 +46,14 @@ class ReplayBuffer:
             "ep_step": ((), torch.int32),
             "done": ((), torch.bool),
         }
+        if depth:
+            fields.update({
+                "depth": (DEPTH_SHAPE, torch.float16),  # the env's (noised) processed policy ``depth_image`` at s
+                "depth1": (DEPTH_SHAPE, torch.float16),  # the env's (noised) policy ``depth_image`` at s1 (pre-reset): latent target
+                "depth1_clean": (DEPTH_SHAPE, torch.float16),  # CLEAN processed depth image at s1 (pre-reset): reconstruction target
+            })
+            self.window_keys = self.window_keys + ("depth", "depth1", "depth1_clean")
+            self.start_keys = self.start_keys + ("depth",)
         self.data = {}
         for k, (shape, dt) in fields.items():
             shp = (T, N) + ((shape,) if isinstance(shape, int) else tuple(shape))
