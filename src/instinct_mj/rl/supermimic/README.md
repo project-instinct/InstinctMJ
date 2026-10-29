@@ -6,8 +6,9 @@ every imagined step renders the depth image of the predicted state by ray castin
 `latent`: the world-model state also carries the latent z of E, the world model predicts it, E is trained by a reconstruction
 decoder and nothing is rendered in imagination (the buffer stores depth images instead). Results (success / link pos / joint pos
 error): latent 96.9% / 0.044 m / 0.134 rad at iteration 8000 (128 episodes, original run); render + plan D (see **Encoder training**)
-93.8% / 0.047 m / 0.139 rad; render + plan D + value head (no annealing) 93.1% at 6000 and 87.4% at 8000 vs plan D alone 74.2% / 91.0%
-(3 seeds x 256 envs).
+93.8% / 0.047 m / 0.139 rad; at iteration 8000 with 3 seeds x 256 envs: plan D 91.0% / 0.048 m / 0.140 rad, plan D + value head
+annealed 3000 -> 6000 94.9% / 0.046 m / 0.143 rad, plan D + value head kept on 87.4% / 0.050 m / 0.152 rad (93.1% already at 6000,
+vs 74.2% for plan D).
 
 ```bash
 # latent (the setting of the 96.9% run)
@@ -106,7 +107,7 @@ flags replace that signal, all training-only (the exported policy is unchanged):
 - `--agent.aux-value-weight 1.0`: a value head on the actor's own input (proprioception, commands, E(depth)) regresses the critic's
   GAE target of the imagined states, a task signal for E. It speeds up learning a lot (93% vs 74% success at iteration 6000, 3 seeds)
   but lowers the final precision if kept on (87% vs 91% at 8000), so it is annealed to 0 with `--agent.aux-value-anneal-start` /
-  `--agent.aux-value-anneal-end` (as in Kickstarting).
+  `--agent.aux-value-anneal-end` (as in Kickstarting): annealed 3000 -> 6000 it reaches 94.9% at 8000 (3 seeds x 256 envs).
 
 ```bash
 instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.max-iterations 8000 --agent.encoder-policy-grad 0 \
