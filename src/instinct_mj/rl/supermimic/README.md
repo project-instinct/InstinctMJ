@@ -24,9 +24,9 @@ instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024
 instinct-train Instinct-Perceptive-Shadowing-Latent-G1-v0 --num-envs 1024
 ```
 
-Both run 8000 iterations; any field can still be overridden with `--agent.<field>`. `latent` rejects `encoder_policy_grad` != 1,
-`aux_recon_weight` > 0, `aux_value_weight` > 0 and `latent_policy_grad` != 0 (they act on the rendered path; a `ValueError` is
-raised); `render` ignores the `latent_*` fields. The rest of this README describes the `render` method unless stated otherwise.
+Both run 8000 iterations; any field can still be overridden with `--agent.<field>`. `render` requires `aux_recon_weight` > 0 (the
+reconstruction is what trains the depth encoder); `latent` rejects `aux_recon_weight` > 0, `aux_value_weight` > 0 and
+`latent_policy_grad` != 0 (a `ValueError` is raised); `render` ignores the `latent_*` fields. The rest of this README describes the `render` method unless stated otherwise.
 
 ![render method](assets/render_method.png)
 
@@ -46,14 +46,14 @@ Iteration 8000; one training seed per row.
 | **Latent** task | 96.9% | 0.044 m | 0.134 rad | 128 envs |
 | render, reconstruction only (no value head) | 91.0% | 0.048 m | 0.140 rad | 3 seeds x 256 envs |
 | render, reconstruction + value head kept on | 87.4% | 0.050 m | 0.152 rad | 3 seeds x 256 envs |
-| render, encoder trained by the policy gradient only | 94.5% | 0.049 m | 0.148 rad | 128 envs |
+| render, encoder trained by the policy gradient only (earlier variant, removed) | 94.5% | 0.049 m | 0.148 rad | 128 envs |
 
 - Render task per motion: diveroll4 96% / 100% / 100% / 81% (4 terrains), rollVault11 100% / 100%, jumpsit2 92% / 99%, kneelClimbStep1
   92% / 88% (with / without wall). About 2.7 h of training (0.83 it/s while the value head is on, 11.6 GB peak).
 - The value head mainly speeds up learning: at iteration 6000, 93.1% with the head kept on vs 74.2% with reconstruction only.
 - The latent result comes from the run that introduced the method, on the code before both methods were merged (same design; the
   merged `latent` path was checked against that code on short runs, not retrained to 8000 iterations).
-- Training the encoder by the policy gradient alone gives a similar success rate but a degraded encoder: linear probes of its
+- Training the encoder by the policy gradient alone (earlier variant) gives a similar success rate but a degraded encoder: linear probes of its
   feature on real depth images (terrain class, wall / no wall, kneel progress) score below a randomly initialized encoder.
 
 ## Method
@@ -86,21 +86,18 @@ world; about 0.15 s per iteration cheaper). The result is the raw `distance_to_i
 pipeline (contour, artifacts, stereo noise, blur, too-close; fresh random samples) is applied in `DepthPipeline.noised`, a stateless
 fused re-implementation (about 10x faster than the sensor's functions, numerically the same for the deterministic stages and the same
 distributions for the random ones, `python tests/supermimic/check_depth_noise.py`), followed by normalize + crop / resize,
-so the policy sees the observation format of the env. Gradient w.r.t. the pose by the implicit function trick: hit distance and
-surface normal n from the kernel (no gradient), `t = n·(x* − o)/(n·d)` with gradient on the ray origin o and direction d (zero for
-hits on the robot's own links). E is the policy's depth encoder (exported as `0-depth_image.onnx`). The Render task trains it without
-the policy gradient (see **Encoder training**); with `encoder_policy_grad 1` (the field default) it is trained by the policy loss
-through this path. All 27 x 48 rays are needed: the output pixels depend on the raw pixels within 2 px (contour, blur) and the
+so the policy sees the observation format of the env. The image is an input only: it is rendered without gradient and the actor
+sees the feature of the policy's depth encoder E (exported as `0-depth_image.onnx`) through a stop-gradient. All 27 x 48 rays are needed: the output pixels depend on the raw pixels within 2 px (contour, blur) and the
 too-close stage on whole columns. The whole cast sequence runs in one CUDA graph without host syncs.
 
-**Encoder training.** Trained by the BPTT policy gradient alone (`encoder_policy_grad 1`, the field default), E degrades below a randomly initialized encoder: linear
-probes of its feature on real depth images (terrain class, wall / no wall, kneel progress) are all lower than for random weights. Three
-flags replace that signal, all training-only (the exported policy is unchanged):
+**Encoder training.** E gets no policy gradient. An earlier variant trained it by the BPTT policy gradient alone (through the
+rendered image, with the gradient of the image w.r.t. the predicted pose); E then degraded below a randomly initialized encoder: linear
+probes of its feature on real depth images (terrain class, wall / no wall, kneel progress) were all lower than for random weights. That
+variant is removed; two training-only losses train E (the exported policy is unchanged):
 
-- `--agent.encoder-policy-grad 0`: the actor sees the detached feature, E receives no policy gradient.
-- `--agent.aux-recon-weight 1.0`: a decoder reconstructs the clean depth image from E(noised image) of 2048 real buffered states per
+- reconstruction (`aux_recon_weight`, 1.0): a decoder reconstructs the clean depth image from E(noised image) of 2048 real buffered states per
   iteration (L1); during the world-model-only iterations E is pre-trained by it alone.
-- `--agent.aux-value-weight 1.0`: a value head on the actor's own input (proprioception, commands, E(depth)) regresses the critic's
+- value head (`aux_value_weight`, 1.0): a value head on the actor's own input (proprioception, commands, E(depth)) regresses the critic's
   GAE target of the imagined states, a task signal for E. It speeds up learning a lot (93% vs 74% success at iteration 6000, 3 seeds)
   but lowers the final precision if kept on (87% vs 91% at 8000), so it is annealed to 0 with `--agent.aux-value-anneal-start` /
   `--agent.aux-value-anneal-end` (as in Kickstarting): annealed 3000 -> 6000 it reaches 94.9% at 8000 (3 seeds x 256 envs).
@@ -156,7 +153,7 @@ All fields are in `config.py` (`SuperMimicRunnerCfg`, part of the task's agent c
 | `amp`, `compile`, `compile_policy` | `bf16`, True, True | bf16 MLPs, `torch.compile` of the world model and the imagination step |
 | `vision` | `render` | `render` or `latent` (see the top of this README); `latent_windows`, `latent_weight`, `latent_recon_images`, `latent_recon_weight` are the `latent` method's fields |
 | `render_robot` | True | Imagined depth images include the robot's own links (self-occlusion) |
-| `encoder_policy_grad`, `aux_recon_weight` | 1.0, 0 | Policy-gradient scale into the depth encoder, reconstruction loss weight (see **Encoder training**) |
+| `aux_recon_weight`, `aux_recon_images` | 0, 2048 | Reconstruction loss weight (required > 0 for `render`) and images per update (see **Encoder training**) |
 | `aux_value_weight`, `aux_value_anneal_start`, `aux_value_anneal_end` | 0, -1, -1 | Value-head loss into the depth encoder and its linear annealing to 0 |
 | `checkpoint_imagination` | False | Gradient checkpointing of the imagination (less memory, more time) |
 
@@ -178,7 +175,7 @@ terrain only (about 0.15 s cheaper, but the encoder then never sees the robot's 
 | `kinematics.py`, `rotations.py` | Differentiable forward kinematics, rotation utilities |
 | `terrain.py` | Terrain heightmap (ray-cast once, cached) and height scan |
 | `buffer.py`, `sim.py`, `motion_lib.py` | Replay buffer, env readers, reference motions |
-| `render.py`, `depth.py` | Differentiable depth renderer (terrain + robot ray casting with the env's kernel), fused camera noise pipeline / clean images |
+| `render.py`, `depth.py` | Depth renderer (terrain + robot ray casting with the env's kernel), fused camera noise pipeline / clean images |
 | `scripts/supermimic/evaluate.py` | Evaluation entry point |
 | `LICENSE-supermimic_vibed` | MIT license of the code adapted from supermimic_vibed |
 | `tests/supermimic/` | Analytic-head checks against the env, camera-noise equivalence, compile parity, Play loading, failure diagnosis (latent design), benchmarks |

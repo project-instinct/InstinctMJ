@@ -343,7 +343,6 @@ def g1_perceptive_shadowing_render_instinct_rl_cfg() -> InstinctRlOnPolicyRunner
     no policy gradient, it is trained by a reconstruction decoder and a value head annealed to 0 over iterations 3000 -> 6000."""
     cfg = G1PerceptiveShadowingRunnerCfg()
     cfg.vision = "render"
-    cfg.encoder_policy_grad = 0.0
     cfg.aux_recon_weight = 1.0
     cfg.aux_value_weight = 1.0
     cfg.aux_value_anneal_start = 3000

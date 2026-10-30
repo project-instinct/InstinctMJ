@@ -1,7 +1,8 @@
-"""Differentiable depth renderer of a task camera against the terrain AND the robot's own links, with the env's own ray-cast kernel.
+"""Depth renderer of a task camera against the terrain AND the robot's own links, with the env's own ray-cast kernel.
 
 The world model replaces the simulator, so the depth image of the policy is a function of the robot state, ``o = f(S)``: pose of
-the camera mount + ray casting against the scene, differentiable w.r.t. the pose of the body the camera is attached to.
+the camera mount + ray casting against the scene. The image is an input of the policy only (no gradient: the policy's depth
+encoder is trained by its auxiliary losses and the actor sees its feature through a stop-gradient).
 :meth:`DepthRenderer.render` returns the raw sensor measurement (``distance_to_image_plane`` of the whole pixel grid, in
 meters); running the sensor-equivalent noise pipeline on it (``DepthPipeline.noised``) gives the policy's observation (its
 random stages are fresh samples, independent of the image, i.e. reparameterized).
@@ -22,13 +23,6 @@ sample, render context and BVH; nothing is shared with the env's sensors, its CU
 ``qpos`` (root pose + joint angles) of every sample is written into its world, ``kinematics`` and ``refit_bvh`` run, and the
 camera rays are cast per world: one cast covers the terrain and the robot's own links (self-occlusion), as in the sensor. With ``render_robot=False`` the robot's geoms are moved to a geom group that is not enabled (terrain only, no self-occlusion). The
 model is the nominal one (the startup domain randomization of geom sizes / poses is not applied).
-
-Gradient (implicit function trick): the hit distance ``t*`` and the surface normal ``n`` come from the kernel without
-gradient; ``t = n . (x* - o) / (n . d)`` is evaluated WITH gradient on the ray origin ``o`` and direction ``d`` (``x*`` = hit
-point, constant): the value is ``t*`` and the derivative is the exact first-order one for a locally planar surface that is
-fixed in the world. The same spirit as ``volume_points_penetration`` of the parkour heads. ``n . d`` is clamped away from 0
-(sign preserving) in the gradient only; misses give ``max_distance`` with zero gradient. Hits on the robot's own links (they
-move with the state, not fixed in the world) have zero gradient.
 """
 
 from __future__ import annotations
@@ -44,7 +38,6 @@ from mujoco_warp import rays
 from .rotations import mat_to_quat, mv, quat_to_mat
 
 _VEC6 = wp.types.vector(length=6, dtype=float)
-ND_MIN = 0.05  # clamp of |n . d| in the gradient (grazing hits)
 
 
 class Worlds:
@@ -109,7 +102,6 @@ class SceneRays:
         assert c.mesh_filter_max_hops >= self.HOPS
         mjm = copy.deepcopy(env.sim.mj_model)
         terrain = mjm.geom_bodyid == mjm.body("terrain").id
-        self.terrain_geom = torch.as_tensor(terrain, device=device)  # (ngeom,) bool
         if self.packed:  # the robot's geoms are moved to a geom group that is not enabled
             mjm.geom_group[~terrain] = (max(c.include_geom_groups) + 1) % mujoco.mjNGROUP
             assert mjm.geom_group[~terrain].max() not in c.include_geom_groups
@@ -230,21 +222,15 @@ class DepthRenderer:
         d = mv(Rc.unsqueeze(1), dirs_local)
         return o, d, dirs_local[..., 0]
 
-    def measure(self, o, d, forward, dist, n, geomid) -> torch.Tensor:
-        """Raw sensor measurement (``distance_to_image_plane`` [m], max-clipped) (B, H, W, 1) from the rays and their hits
-        (``dist``, ``n``, ``geomid`` of ``SceneRays.cast``): the value is the kernel's hit distance, the gradient w.r.t. the rays is
-        the implicit-function one for terrain hits and zero for hits on the robot's links (see the module docstring)."""
+    def measure(self, dist, forward) -> torch.Tensor:
+        """Raw sensor measurement (``distance_to_image_plane`` [m], max-clipped) (B, H, W, 1) from the kernel's hit distances
+        ``dist`` along the rays (``SceneRays.cast``) and the camera-forward component ``forward`` of the ray directions."""
         hit = (dist >= 0) & (dist <= self.max_distance)
-        x = o.detach() + dist.clamp(min=0).unsqueeze(-1) * d.detach()
-        nd = (n * d).sum(-1)
-        nd = torch.where(nd < 0, -1.0, 1.0) * nd.detach().abs().clamp(min=ND_MIN) + (nd - nd.detach())
-        t_lin = (n * (x - o)).sum(-1) / nd  # = dist up to rounding, with the first-order dependence on o and d
-        t = dist + (t_lin - t_lin.detach()) * self.scene.terrain_geom[geomid]  # exact value (also at grazing angles), gradient of the linearization
-        return torch.where(hit, t * forward, self.max_distance).view(-1, *self.shape, 1)
+        return torch.where(hit, dist * forward, self.max_distance).view(-1, *self.shape, 1)
 
     def render(self, p: torch.Tensor, R: torch.Tensor, q: torch.Tensor, env: torch.Tensor) -> torch.Tensor:
         """Raw sensor measurement (B, H, W, 1) of the cameras of envs ``env`` for the root pose ``(p, R)`` and joint angles
-        ``q`` (B, nq); differentiable w.r.t. the pose (``rays`` -> ``SceneRays.cast`` -> ``measure``)."""
+        ``q`` (B, nq) (``rays`` -> ``SceneRays.cast`` -> ``measure``)."""
         o, d, forward = self.rays(p, R, env)
-        dist, n, geomid = self.scene.cast(p, R, q, o.detach(), d.detach())
-        return self.measure(o, d, forward, dist, n, geomid)
+        dist, _, _ = self.scene.cast(p, R, q, o, d)
+        return self.measure(dist, forward)

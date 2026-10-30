@@ -43,10 +43,10 @@ class SuperMimicRunnerCfg:
     # ---- vision method of the perceptive shadowing trainer ----
     vision: str = "render"
     """How the depth image enters the imagination of perceptive shadowing, "render" or "latent". "render": the world model predicts
-    the robot state only and the depth image of every imagined state is rendered (``render.py``); the policy's own network acts on it
-    and its depth encoder E is trained through the policy loss (plan D / ``aux_*`` below). "latent": the world-model state also
+    the robot state only and the depth image of every imagined state is rendered (``render.py``); the policy's own network acts on it,
+    the actor sees the feature of its depth encoder E through a stop-gradient and E is trained by the ``aux_*`` losses below. "latent": the world-model state also
     carries the latent z of E, the world model predicts it (``latent_*`` below), E is trained by a reconstruction decoder only and
-    nothing is rendered in imagination; the buffer stores depth images. "latent" excludes ``encoder_policy_grad`` != 1,
+    nothing is rendered in imagination; the buffer stores depth images. "render" requires ``aux_recon_weight`` > 0; "latent" excludes
     ``aux_recon_weight`` > 0, ``aux_value_weight`` > 0 and ``latent_policy_grad`` != 0 (default "render")."""
 
     # ---- visual latent (part of the world-model state; ``vision="latent"`` and the parkour runner) ----
@@ -65,25 +65,21 @@ class SuperMimicRunnerCfg:
     The world model's own z0 stays detached from E. 0 = E is trained by the reconstruction only (parkour runner only;
     perceptive shadowing requires 0) (default 0)."""
 
-    # ---- plan D: the depth encoder is trained by a reconstruction loss on real images, the policy gradient into it is scaled / stopped ----
-    encoder_policy_grad: float = 1.0
-    """Scale of the BPTT policy gradient into the policy's depth encoder E: the actor MLP is fed the encoder feature
-    ``f.detach() + s * (f - f.detach())`` (the value is unchanged). 1 = the previous behavior (``act_inference``), 0 = the actor sees
-    the detached feature, E receives no policy gradient (default 1.0)."""
+    # ---- render vision: the depth encoder gets no policy gradient, it is trained by a reconstruction loss (+ an annealed value loss) ----
     aux_recon_weight: float = 0.0
     """Weight of the reconstruction loss that trains E: a training-only decoder (``networks.LatentDecoder``) reconstructs the CLEAN
     processed depth image from E(noised image, normalized as the policy input); L1. The images are rendered from
     ``aux_recon_images`` REAL buffered states per update (a noised and a clean version of one raw measurement). The gradient updates
-    only E and the decoder (own Adam; the decoder is training-only), is added to E's policy gradient after the policy gradient's
-    clipping, after a global-norm clip of its own (1.0); during the world-model-only iterations E is trained by it alone.
-    0 = off: no decoder, no extra computation, the previous behavior (default 0)."""
+    only E and the decoder (own Adam; the decoder is training-only), after a global-norm clip of its own (1.0), and is applied by the
+    policy optimizer; during the world-model-only iterations E is trained by it alone. Required (> 0) with ``vision="render"``; 0 for
+    ``vision="latent"`` (default 0)."""
     aux_recon_images: int = 2048
     """Real buffered states rendered (and noised / cleaned) per reconstruction update (default 2048)."""
     aux_value_weight: float = 0.0
     """Weight of the auxiliary value loss that gives E a task signal: a training-only head (``networks.ValueHead``) on the actor's own
     input (the policy observation without the depth slice, and E(depth image)) regresses the critic's GAE(lambda) target of the same
     imagined state (detached, normalized by running statistics); MSE. The gradient updates only E and the head (own Adam), is added to
-    E's gradient after the policy gradient's clipping, after a global-norm clip of its own (1.0), like ``aux_recon_weight``. Requires
+    E's gradient after a global-norm clip of its own (1.0), like ``aux_recon_weight``. Requires
     the critic. 0 = off: no head, no extra computation, the previous behavior (default 0)."""
     aux_value_images: int = 8192
     """Imagined states (a random subset of ``aux_value_images // horizon`` per imagination step) that enter the value loss per policy
@@ -151,10 +147,6 @@ class SuperMimicRunnerCfg:
     render_robot: bool = True
     """Imagined depth images include the robot's own links (self-occlusion, as the env camera); False = terrain only, which is
     slightly cheaper per imagination step (default True)."""
-    render_state_grad: bool = True
-    """Keep the gradient of the rendered depth image w.r.t. the predicted state (implicit-function gradient through the hit
-    normals); False = the image is still rendered from the predicted state but detached from it (stop-gradient), so the encoder
-    and actor are trained through the actions only (default True)."""
     heightmap_resolution: float = 0.05
     """Resolution [m] of the global terrain heightmap used by the analytic height scan (default 0.05)."""
     heightmap_cache_dir: str = "~/.cache/instinct_mj/supermimic_heightmaps"

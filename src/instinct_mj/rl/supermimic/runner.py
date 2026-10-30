@@ -8,11 +8,11 @@ task's; the reference's return-based reset-bin sampler is therefore NOT used). R
 the analytic heads of ``mdp.py``. The policy IS the task's own actor (``EncoderActorCritic`` with the Conv2d depth
 encoder, built by ``instinct_rl.modules.build_actor_critic`` from the task's policy cfg) and acts on the task's ``policy`` observation group.
 Two vision methods (``vision``, default "render"). "render": vision is a function of the state, not part of it: the world model
-predicts only the robot state (and contacts). In imagination the depth image of every predicted state is rendered differentiably against the terrain and robot meshes
-(``render.py``: the camera pose from the predicted torso pose, ray casting with the implicit-function gradient), passed
+predicts only the robot state (and contacts). In imagination the depth image of every predicted state is rendered against the
+terrain and robot meshes (``render.py``: the camera pose from the predicted torso pose, ray casting, no gradient), passed
 through the camera's own noise pipeline (``DepthPipeline.noised``; its random stages are fresh samples) and fed to the
-policy as in the env; the policy's depth encoder ``E`` is trained end-to-end by the BPTT policy loss (no latent, no
-reconstruction loss, no stop-gradient on the visual path). "latent": vision is a latent of the world-model state: the policy's depth
+policy as in the env; the actor sees the feature of the policy's depth encoder ``E`` through a stop-gradient and ``E`` is
+trained by a reconstruction decoder on real buffered states (+ an annealed value head, ``aux_*``). "latent": vision is a latent of the world-model state: the policy's depth
 encoder ``E`` is trained by the world model (clean-image reconstruction), its latent z = E(real image) starts every imagination
 and the world model predicts z with the state; in imagination the actor MLP acts on the predicted z directly (no image is rendered).
 
@@ -106,9 +106,9 @@ class SuperMimicRunner:
         if c["vision"] not in ("render", "latent"):
             raise ValueError(f"vision must be 'render' or 'latent', got {c['vision']!r}")
         self.latent = c["vision"] == "latent"
+        if not self.latent and c["aux_recon_weight"] <= 0:
+            raise ValueError("vision='render': aux_recon_weight must be > 0 (the depth encoder gets no policy gradient, the reconstruction trains it)")
         if self.latent:
-            if c["encoder_policy_grad"] != 1.0:
-                raise ValueError("vision='latent': encoder_policy_grad is render-only (E is trained by the reconstruction decoder, the actor sees z.detach())")
             if c["aux_recon_weight"] > 0:
                 raise ValueError("vision='latent': aux_recon_weight is render-only (the latent decoder already reconstructs the clean image)")
             if c["aux_value_weight"] > 0:
@@ -213,7 +213,6 @@ class SuperMimicRunner:
             return wm.inputs(S, a, xi_n, mdp.scan(S, noisy=False)), wm.targets(S, S1), mdp.reward(S1, f1, origin1, a, a_prev, xi, contact)
 
         ac, pol_norm, policy_autocast = self.ac, self.pol_norm, self.cfg["policy_autocast"]
-        encoder_policy_grad = self.cfg["encoder_policy_grad"]
         d0, d1 = int(self.depth_sl.start), int(self.depth_sl.stop)
 
         def _imag_obs(S, depth, o_hist, f, phase):
@@ -229,12 +228,12 @@ class SuperMimicRunner:
 
         def _imag_core(S, depth, o_hist, f, phase, xi, xi_n, scan):
             """One imagination step: the policy's own network (depth encoder E + actor) on the policy observation, then the
-            world-model step. The gradient flows into E and into the state through the rendered image. The network runs
+            world-model step. The actor sees E's feature through a stop-gradient (E is trained by its auxiliary losses). The network runs
             eagerly (``instinct_rl``'s observation slicing graph-breaks under ``torch.compile`` into many fragments), the
             elementwise work before and after it is compiled."""
             obs = _imag_obs(S, depth, o_hist, f, phase)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=policy_autocast):  # training imagination only
-                a = (ac.act_inference(obs) if encoder_policy_grad == 1.0 else self.act_encoder_scaled(obs, encoder_policy_grad)).float()
+                a = self.act_detached(obs).float()
             return _imag_next(S, a, o_hist, xi, xi_n, scan)
 
         def _imag_core_latent(S, z, o_hist, f, phase, xi, xi_n, scan):
@@ -252,9 +251,9 @@ class SuperMimicRunner:
         def _rays(p, R, env):
             return self.renderer.rays(p, R, env)
 
-        def _depth(o, d, forward, dist, n, geomid):
-            """Raw measurement from the hits, the sensor's noise pipeline, normalize + crop / resize: (B, DEPTH_DIM)."""
-            return self.depth_pipe.noised(self.renderer.measure(o, d, forward, dist, n, geomid)).flatten(1)
+        def _depth(dist, forward):
+            """Raw measurement from the hit distances, the sensor's noise pipeline, normalize + crop / resize: (B, DEPTH_DIM)."""
+            return self.depth_pipe.noised(self.renderer.measure(dist, forward)).flatten(1)
 
         if self.cfg["compile"]:
             _wm_rollout, _wm_err = (torch.compile(fn) for fn in (_wm_rollout, _wm_err))
@@ -282,26 +281,19 @@ class SuperMimicRunner:
 
     def render_depth(self, S, env_idx) -> torch.Tensor:
         """The policy's depth observation (B, DEPTH_DIM) of the states ``S`` of envs ``env_idx``: the raw measurement of the
-        camera rendered against the terrain meshes (differentiable w.r.t. the root pose), then the sensor's noise pipeline,
-        normalization and crop / resize."""
-        o, d, forward = self.rays_fn(S[0], S[1], env_idx)
-        dist, n, geomid = self.renderer.scene.cast(S[0], S[1], S[4], o.detach(), d.detach())
-        if not self.cfg["render_state_grad"]:  # the image as an input only: no gradient into the predicted state
-            o, d, forward = o.detach(), d.detach(), forward.detach()
-        return self.depth_fn(o, d, forward, dist, n, geomid)
+        camera rendered against the scene meshes, then the sensor's noise pipeline, normalization and crop / resize. An input
+        only (no gradient into the predicted state: the actor sees the encoder feature through a stop-gradient)."""
+        with torch.no_grad():
+            o, d, forward = self.rays_fn(S[0], S[1], env_idx)
+            dist, _, _ = self.renderer.scene.cast(S[0], S[1], S[4], o, d)
+            return self.depth_fn(dist, forward)
 
-    def act_encoder_scaled(self, obs, scale: float) -> torch.Tensor:
-        """``ac.act_inference(obs)`` with the depth encoder's feature computed explicitly and fed to the actor MLP as
-        ``f.detach() + scale * (f - f.detach())`` (the same value; the policy gradient into the encoder is scaled by ``scale``, 0 =
-        none: the encoder then runs without a graph). The actor input is in the format ``ParallelLayer`` gives it: the observation
-        without the depth slice (taken out), then the feature."""
-        image = obs[:, self.depth_sl].reshape(-1, *self.depth_shape)
-        if scale == 0.0:
-            with torch.no_grad():
-                f = self.depth_enc(image)
-        else:
-            f = self.depth_enc(image)
-            f = f.detach() + scale * (f - f.detach())
+    def act_detached(self, obs) -> torch.Tensor:
+        """``ac.act_inference(obs)`` with the depth encoder's feature computed without a graph (stop-gradient: no policy gradient into
+        the encoder). The actor input is in the format ``ParallelLayer`` gives it: the observation without the depth slice (taken
+        out), then the feature."""
+        with torch.no_grad():
+            f = self.depth_enc(obs[:, self.depth_sl].reshape(-1, *self.depth_shape))
         return self.ac.actor(torch.cat((obs[:, : self.depth_sl.start], obs[:, self.depth_sl.stop :], f), -1))
 
     def lr_at(self, it: int) -> float:
@@ -614,7 +606,6 @@ class SuperMimicRunner:
                 out[f"enc_act/{name}/positive_fraction"] = active.float().mean()
         if grads:
             gnorm = lambda params: torch.linalg.vector_norm(torch.stack([p.grad.norm() for p in params]))  # noqa: E731
-            out["grad_norm_pre_clip/encoder"] = gnorm(self.depth_enc.parameters())
             out["grad_norm_pre_clip/actor_mlp"] = gnorm(self.ac.actor.parameters())
         return out
 
@@ -640,7 +631,7 @@ class SuperMimicRunner:
 
     def aux_recon_step(self, noised, clean) -> dict:
         """Gradient step of the reconstruction loss: the decoder has its own optimizer; E's gradient (global-norm clipped on its own, so
-        that neither signal rescales the other) is added to E's gradient (policy gradient, already clipped, if any) before the
+        that neither signal rescales the other) is added to E's gradient before the
         optimizer of E (``opt_pi``) steps."""
         loss, stats = self.aux_recon_loss(noised, clean)
         enc_params, dec_params = list(self.depth_enc.parameters()), list(self.recon_dec.parameters())
@@ -683,7 +674,7 @@ class SuperMimicRunner:
 
     def aux_value_step(self, Vo, Vt, Vi, targets) -> dict:
         """Gradient step of the value loss: the head has its own optimizer; E's gradient (global-norm clipped on its own, so that neither
-        signal rescales the other) is added to E's gradient (policy gradient, already clipped, if any) before the optimizer of E
+        signal rescales the other) is added to E's gradient before the optimizer of E
         (``opt_pi``) steps."""
         obs = torch.cat(Vo)
         target = torch.cat([targets[t, i] for t, i in zip(Vt, Vi)])
@@ -748,9 +739,6 @@ class SuperMimicRunner:
         loss = -J.mean()
         self.opt_pi.zero_grad(set_to_none=True)
         loss.backward()
-        if c["encoder_policy_grad"] == 0.0:
-            for p_ in self.depth_enc.parameters():  # the actor saw the detached feature (computed without a graph): exactly zero gradient
-                p_.grad = torch.zeros_like(p_)
         diag = self.encoder_diagnostics(im["Dlog"]) if not self.latent and (self.it + 1) % c["log_interval"] == 0 else {}
         gn = nn.utils.clip_grad_norm_(self.ac.parameters(), 1.0)
         nn.utils.clip_grad_value_(self.ac.parameters(), 0.1)
