@@ -5,17 +5,17 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://docs.python.org/3/)
 [![instinct_rl](https://img.shields.io/badge/training-instinct__rl-brightgreen.svg)](https://github.com/project-instinct/instinct_rl)
 
-This branch trains the G1 perceptive shadowing parkour policy (`Instinct-Perceptive-Shadowing-G1-*`, depth camera) with
-**SuperMimic**: the simulator only collects data, a differentiable world model predicts the robot state, and the policy is trained
-by backpropagation through 32-step imagined rollouts. No PPO. The depth image is not imagined: at every imagined state it is
-rendered from the known scene by differentiable ray casting (MuJoCo Warp), so the policy's depth encoder is trained end to end.
-InstinctMJ is the `mjlab` port of [InstinctLab](https://github.com/project-instinct/InstinctLab)
-([Project-Instinct](https://project-instinct.github.io/)).
+This branch trains the G1 perceptive shadowing parkour policy (depth camera) with **SuperMimic**: the simulator only collects data,
+a differentiable world model predicts the robot state, and the policy is trained by backpropagation through 32-step imagined
+rollouts. No PPO. Two tasks implement the two ways vision enters imagination: `Instinct-Perceptive-Shadowing-Render-G1-v0` renders
+the depth image of every imagined state from the known scene by ray casting (MuJoCo Warp), `Instinct-Perceptive-Shadowing-Latent-G1-v0`
+lets the world model predict the latent of the policy's depth encoder. InstinctMJ is the `mjlab` port of
+[InstinctLab](https://github.com/project-instinct/InstinctLab) ([Project-Instinct](https://project-instinct.github.io/)).
 
-![method](src/instinct_mj/rl/supermimic/assets/method.png)
+![render method](src/instinct_mj/rl/supermimic/assets/render_method.png)
 
-One RTX 3090, 1024 environments: **95% success** on the 10 motions of the released dataset (diveroll, knee climb onto a 50 cm
-step, jump-sit, roll vault) after 8000 iterations (2.8 h). Method, results and configuration:
+One RTX 3090, 1024 environments, 8000 iterations, the 10 motions of the released dataset (diveroll, knee climb onto a 50 cm step,
+jump-sit, roll vault): **94.9% success** with the Render task, **96.9%** with the Latent task. Method, results and configuration:
 [src/instinct_mj/rl/supermimic/README.md](src/instinct_mj/rl/supermimic/README.md).
 
 ## Installation
@@ -35,8 +35,8 @@ Download from the [SuperMimic release](https://github.com/project-instinct/Insti
 
 - `20251116_50cm_kneeClimbStep1.zip`: the dataset. Unzip into `~/Datasets/` (the default `MOTION_FOLDER` in
   `src/instinct_mj/tasks/shadowing/perceptive/config/g1/perceptive_shadowing_cfg.py`).
-- The trained policy checkpoint and its ONNX export. The world-model state in the release belongs to the earlier visual-latent
-  version and cannot be resumed with this code.
+- The trained policy checkpoint and its ONNX export. The world-model state in the release belongs to the original visual-latent
+  run (before the Latent task was merged) and cannot be resumed; the policy checkpoint plays and exports as is.
 
 ## Usage
 

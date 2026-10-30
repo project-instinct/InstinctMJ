@@ -1,67 +1,60 @@
 # SuperMimic world-model training for perceptive shadowing parkour (G1)
 
-**Two vision methods**, registered as two tasks with their settings in code (`rl_cfg.py`): `Instinct-Perceptive-Shadowing-Latent-G1-v0`
-and `Instinct-Perceptive-Shadowing-Render-G1-v0` (+ `-Play-v0`); the field behind them is `vision` (`latent | render`). Both share the world model, critic, failure head and
-the task's policy; they differ in how the depth image enters imagination. `render`: the world model predicts the robot state only and
-every imagined step renders the depth image of the predicted state by ray casting; the policy's own depth encoder E acts on it.
-`latent`: the world-model state also carries the latent z of E, the world model predicts it, E is trained by a reconstruction
-decoder and nothing is rendered in imagination (the buffer stores depth images instead). Results (success / link pos / joint pos
-error): latent 96.9% / 0.044 m / 0.134 rad at iteration 8000 (128 episodes, original run); render + plan D (see **Encoder training**)
-93.8% / 0.047 m / 0.139 rad; at iteration 8000 with 3 seeds x 256 envs: plan D 91.0% / 0.048 m / 0.140 rad, plan D + value head
-annealed 3000 -> 6000 94.9% / 0.046 m / 0.143 rad, plan D + value head kept on 87.4% / 0.050 m / 0.152 rad (93.1% already at 6000,
-vs 74.2% for plan D).
-
-```bash
-# latent (the setting of the 96.9% run: no failure head)
-instinct-train Instinct-Perceptive-Shadowing-Latent-G1-v0 --num-envs 1024
-# render (plan D + value head annealed 3000 -> 6000)
-instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024
-```
-
-Both run 8000 iterations; any field can still be overridden with `--agent.<field>`. Evaluation and play load the policy of either
-method (same env and policy network).
-
-`latent` excludes `encoder_policy_grad` != 1, `aux_recon_weight` > 0, `aux_value_weight` > 0 and `latent_policy_grad` != 0 (they act on
-the rendered path; setting them raises a `ValueError`); `render` ignores the `latent_*` fields. The rest of this README describes
-the `render` method.
-
 Trains the depth policy of the perceptive shadowing task inside a learned world model, following
 [SuperMimic](https://arxiv.org/abs/2610.28480) (Liao et al., CoRL 2026) and its open reproduction
 [supermimic_vibed](https://github.com/zita-ch/supermimic_vibed) (MIT, Chong Zhang).
 
 - **Single stage, no PPO.** The simulator only collects data. A differentiable world model is fit to it, and the policy is trained by
   back-propagation through 32-step imagined rollouts with analytic task rewards and a critic bootstrap.
-- **Vision is a function of the state, not part of it.** The world model predicts the robot state only. In imagination the depth
-  image of every predicted state is rendered differentiably from the known scene, terrain and robot meshes (the env camera's own
-  MuJoCo Warp ray-cast kernel, gradient through the hit normal), and passed through the camera's own noise pipeline; the policy's
-  depth encoder is trained end-to-end by the policy loss.
+- **Two vision methods**, two tasks with their settings in code (`rl_cfg.py`), differing only in how the depth image enters
+  imagination (the `vision` field):
+  - `Instinct-Perceptive-Shadowing-Render-G1-v0`: the world model predicts the robot state only; every imagined step renders the depth
+    image of the predicted state from the known scene, terrain and robot meshes (the env camera's own MuJoCo Warp ray-cast kernel and
+    noise pipeline). The policy's depth encoder gets no policy gradient: it is trained by a reconstruction decoder and a value head
+    annealed to 0 over iterations 3000 -> 6000 (see **Encoder training**).
+  - `Instinct-Perceptive-Shadowing-Latent-G1-v0`: the world-model state also carries the latent z of the depth encoder and the world
+    model predicts it; the encoder is trained by a reconstruction decoder; nothing is rendered in imagination (the replay buffer
+    stores depth images instead).
 - **Unchanged task and policy.** All domain randomization, camera noise and resets of the task are kept. The policy is the task's
   `EncoderActorCritic` (Conv2d depth encoder); checkpoints use the `OnPolicyRunner` format, so `instinct-play` and its ONNX export
-  load them unchanged.
+  load them unchanged, whichever method trained them.
 
-![method](assets/method.png)
+```bash
+instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024
+instinct-train Instinct-Perceptive-Shadowing-Latent-G1-v0 --num-envs 1024
+```
 
-(a) The simulator only collects data; the world model is fit on 8-step windows. (b) In imagination the policy acts on the depth
-image rendered from the predicted state by differentiable ray casting, and the gradient of the return flows back through the world
-model, the policy and the renderer.
+Both run 8000 iterations; any field can still be overridden with `--agent.<field>`. `latent` rejects `encoder_policy_grad` != 1,
+`aux_recon_weight` > 0, `aux_value_weight` > 0 and `latent_policy_grad` != 0 (they act on the rendered path; a `ValueError` is
+raised); `render` ignores the `latent_*` fields. The rest of this README describes the `render` method unless stated otherwise.
+
+![render method](assets/render_method.png)
+
+The render method in imagination: the renderer casts the depth image of the predicted state, the CNN encoder's feature enters the
+actor through a stop-gradient, the actor's action drives the (frozen) world model to the next state. The policy gradient trains the
+actor only; the reconstruction gradient (decoder, training only, on real buffered states) trains the encoder and the decoder.
 
 ## Results
 
 One RTX 3090, 1024 environments, dataset `20251116_50cm_kneeClimbStep1` (10 motions on 5 terrains). Play setting (each motion from
-its first frame, no pushes, camera noise on, the three tracking terminations on), 12–13 episodes per motion; success = the whole
-motion without any termination.
+its first frame, no pushes, camera noise on, the three tracking terminations on); success = the whole motion without any termination.
+Iteration 8000; one training seed per row.
 
-| Iteration | Training time | Success | Completion | Link pos error | Joint pos error |
-|---|---|---|---|---|---|
-| 2000 | 0.6 h | 9% | 45% | 0.058 m | 0.144 rad |
-| 4000 | 1.3 h | 71% | 81% | 0.058 m | 0.158 rad |
-| 6000 | 2.0 h | 82% | 91% | 0.057 m | 0.170 rad |
-| 8000 | 2.8 h | 95% | 97% | 0.049 m | 0.148 rad |
+| Method / setting | Success | Link pos error | Joint pos error | Evaluation |
+|---|---|---|---|---|
+| **Render** task (reconstruction + value head annealed 3000 -> 6000) | 94.9% | 0.046 m | 0.143 rad | 3 seeds x 256 envs |
+| **Latent** task | 96.9% | 0.044 m | 0.134 rad | 128 envs |
+| render, reconstruction only (no value head) | 91.0% | 0.048 m | 0.140 rad | 3 seeds x 256 envs |
+| render, reconstruction + value head kept on | 87.4% | 0.050 m | 0.152 rad | 3 seeds x 256 envs |
+| render, encoder trained by the policy gradient only | 94.5% | 0.049 m | 0.148 rad | 128 envs |
 
-Per motion at iteration 8000: diveroll4 (4 terrains) 100%, rollVault11 100% / 100%, jumpsit2 100% / 92%, kneelClimbStep1
-85% / 69% (with / without wall). One seed, default flags; training time only (no evaluation during training). For reference, the
-earlier version with a visual latent in the world-model state reached 97% at iteration 8000 (with `--agent.fail-head False
---agent.wm-failure-frac 0 --agent.wm-holdout-envs 0`; 0.044 m link error), and the version with a learned depth-image head 95%.
+- Render task per motion: diveroll4 96% / 100% / 100% / 81% (4 terrains), rollVault11 100% / 100%, jumpsit2 92% / 99%, kneelClimbStep1
+  92% / 88% (with / without wall). About 2.7 h of training (0.83 it/s while the value head is on, 11.6 GB peak).
+- The value head mainly speeds up learning: at iteration 6000, 93.1% with the head kept on vs 74.2% with reconstruction only.
+- The latent result comes from the run that introduced the method, on the code before both methods were merged (same design; the
+  merged `latent` path was checked against that code on short runs, not retrained to 8000 iterations).
+- Training the encoder by the policy gradient alone gives a similar success rate but a degraded encoder: linear probes of its
+  feature on real depth images (terrain class, wall / no wall, kneel progress) score below a randomly initialized encoder.
 
 ## Method
 
@@ -95,11 +88,12 @@ fused re-implementation (about 10x faster than the sensor's functions, numerical
 distributions for the random ones, `python tests/supermimic/check_depth_noise.py`), followed by normalize + crop / resize,
 so the policy sees the observation format of the env. Gradient w.r.t. the pose by the implicit function trick: hit distance and
 surface normal n from the kernel (no gradient), `t = n·(x* − o)/(n·d)` with gradient on the ray origin o and direction d (zero for
-hits on the robot's own links). E is the policy's depth encoder (exported as `0-depth_image.onnx`); by default it is trained by the
-policy loss through this path (see **Encoder training** for the alternatives). All 27 x 48 rays are needed: the output pixels depend on the raw pixels within 2 px (contour, blur) and the
+hits on the robot's own links). E is the policy's depth encoder (exported as `0-depth_image.onnx`). The Render task trains it without
+the policy gradient (see **Encoder training**); with `encoder_policy_grad 1` (the field default) it is trained by the policy loss
+through this path. All 27 x 48 rays are needed: the output pixels depend on the raw pixels within 2 px (contour, blur) and the
 too-close stage on whole columns. The whole cast sequence runs in one CUDA graph without host syncs.
 
-**Encoder training.** Trained by the BPTT policy gradient alone (the default), E degrades below a randomly initialized encoder: linear
+**Encoder training.** Trained by the BPTT policy gradient alone (`encoder_policy_grad 1`, the field default), E degrades below a randomly initialized encoder: linear
 probes of its feature on real depth images (terrain class, wall / no wall, kneel progress) are all lower than for random weights. Three
 flags replace that signal, all training-only (the exported policy is unchanged):
 
@@ -168,7 +162,8 @@ All fields are in `config.py` (`SuperMimicRunnerCfg`, part of the task's agent c
 
 ## Performance
 
-RTX 3090, 1024 environments: about 1.2 s per iteration, 12 GB peak memory, steady. Per iteration: the imagination ray casts about
+RTX 3090, 1024 environments, render method: about 1.2 s per iteration (Render task: 0.83 it/s while the value head is on, 11.6 GB peak).
+Per iteration: the imagination ray casts about
 0.39 s (32 steps × 1024 samples × 27 × 48 rays, one CUDA graph per step, no host syncs), the world-model fit 0.27 s (bf16), the
 simulator 0.23 s (of which the env camera is about a third) and the policy backward 0.15 s. `--agent.render-robot False` renders the
 terrain only (about 0.15 s cheaper, but the encoder then never sees the robot's own links that the real camera sees).
@@ -178,13 +173,14 @@ terrain only (about 0.15 s cheaper, but the encoder then never sees the robot's 
 | File | Content |
 |---|---|
 | `runner.py` | `SuperMimicRunner`, the task's runner: policy, normalizers, save / load, `export_as_onnx`; collection, world-model fit, imagination / BPTT, critic and logging (built lazily by `setup_training`) |
-| `networks.py` | `WorldModel`, `FailureHead`, `Critic`, `RunningNorm` |
+| `networks.py` | `WorldModel`, `LatentDecoder`, `ValueHead`, `FailureHead`, `Critic`, `RunningNorm` |
 | `mdp.py` | Analytic rewards, terminations, policy observation, critic features |
 | `kinematics.py`, `rotations.py` | Differentiable forward kinematics, rotation utilities |
 | `terrain.py` | Terrain heightmap (ray-cast once, cached) and height scan |
 | `buffer.py`, `sim.py`, `motion_lib.py` | Replay buffer, env readers, reference motions |
 | `render.py`, `depth.py` | Differentiable depth renderer (terrain + robot ray casting with the env's kernel), fused camera noise pipeline / clean images |
 | `scripts/supermimic/evaluate.py` | Evaluation entry point |
+| `LICENSE-supermimic_vibed` | MIT license of the code adapted from supermimic_vibed |
 | `tests/supermimic/` | Analytic-head checks against the env, camera-noise equivalence, compile parity, Play loading, failure diagnosis (latent design), benchmarks |
 
 ## Known limitations
@@ -205,7 +201,7 @@ terrain only (about 0.15 s cheaper, but the encoder then never sees the robot's 
 | World-model input | State, action, context | Adds the terrain height scan; context extended to 188 |
 | Outputs | State increments | Adds contact logits, a failure head |
 | Policy | MLP encoder / decoder | The task's own depth policy network |
-| Vision | — | Depth rendered from the predicted state by differentiable ray casting |
+| Vision | — | Depth rendered from the predicted state (render) or a visual latent in the world-model state (latent) |
 | Reset sampling | Return-based bins | The task's adaptive motion bins |
 
 ## Acknowledgements
