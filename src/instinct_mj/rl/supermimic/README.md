@@ -32,9 +32,11 @@ reconstruction is what trains the depth encoder); `latent` rejects `aux_recon_we
 
 One imagination step of each method. (a) Render: the renderer casts the depth image of the predicted robot state, the CNN
 encoder's feature enters the actor through a stop-gradient, the action drives the (frozen) world model to the next state. (b) Latent:
-the CNN encodes the real depth image of the start state once, the world model predicts the next state and latent. In both, the
-policy gradient trains the actor only; the encoder is trained by a training-only decoder (reconstruction of the clean image), in
-(a) together with a value head annealed to 0.
+the CNN encodes the real depth image of the start state once, the world model predicts the next state and latent. In (b) the encoder
+and its decoder are part of the world model: they are fit together with it on real 8-step windows by one optimizer (dynamics, latent
+prediction against E(real image) with the target detached, and reconstruction, the encoder's only training signal). In (a) the
+encoder is trained separately by its decoder (reconstruction of the clean image) and a value head annealed to 0. In both, the
+policy gradient trains the actor only.
 
 ## Results
 
