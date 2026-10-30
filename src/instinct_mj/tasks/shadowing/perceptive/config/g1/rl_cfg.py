@@ -330,6 +330,32 @@ def g1_perceptive_shadowing_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
     return G1PerceptiveShadowingRunnerCfg()
 
 
+def g1_perceptive_shadowing_latent_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
+    """SuperMimic with the ``latent`` vision method: the world model predicts the visual latent of the depth encoder, which is
+    trained by a reconstruction decoder; nothing is rendered in imagination. Setting of the 96.9% run (no failure head)."""
+    cfg = G1PerceptiveShadowingRunnerCfg()
+    cfg.vision = "latent"
+    cfg.fail_head = False
+    cfg.wm_failure_frac = 0.0
+    cfg.wm_holdout_envs = 0.0
+    cfg.max_iterations = 8000
+    return cfg
+
+
+def g1_perceptive_shadowing_render_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
+    """SuperMimic with the ``render`` vision method: the depth image of every imagined state is rendered; the depth encoder gets
+    no policy gradient, it is trained by a reconstruction decoder and a value head annealed to 0 over iterations 3000 -> 6000."""
+    cfg = G1PerceptiveShadowingRunnerCfg()
+    cfg.vision = "render"
+    cfg.encoder_policy_grad = 0.0
+    cfg.aux_recon_weight = 1.0
+    cfg.aux_value_weight = 1.0
+    cfg.aux_value_anneal_start = 3000
+    cfg.aux_value_anneal_end = 6000
+    cfg.max_iterations = 8000
+    return cfg
+
+
 def g1_perceptive_shadowing_one_motion_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
     cfg = G1PerceptiveShadowingRunnerCfg()
     cfg.experiment_name = "g1_perceptive_shadowing_one_motion"

@@ -1,6 +1,7 @@
 # SuperMimic world-model training for perceptive shadowing parkour (G1)
 
-**Two vision methods** (`--agent.vision latent | render`, default `render`). Both share the world model, critic, failure head and
+**Two vision methods**, registered as two tasks with their settings in code (`rl_cfg.py`): `Instinct-Perceptive-Shadowing-Latent-G1-v0`
+and `Instinct-Perceptive-Shadowing-Render-G1-v0` (+ `-Play-v0`); the field behind them is `vision` (`latent | render`). Both share the world model, critic, failure head and
 the task's policy; they differ in how the depth image enters imagination. `render`: the world model predicts the robot state only and
 every imagined step renders the depth image of the predicted state by ray casting; the policy's own depth encoder E acts on it.
 `latent`: the world-model state also carries the latent z of E, the world model predicts it, E is trained by a reconstruction
@@ -11,13 +12,15 @@ annealed 3000 -> 6000 94.9% / 0.046 m / 0.143 rad, plan D + value head kept on 8
 vs 74.2% for plan D).
 
 ```bash
-# latent (the setting of the 96.9% run)
-instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.max-iterations 8000 --agent.vision latent \
-    --agent.fail-head False --agent.wm-failure-frac 0 --agent.wm-holdout-envs 0
-# render (plan D + annealed value head)
-instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.max-iterations 8000 --agent.encoder-policy-grad 0 \
-    --agent.aux-recon-weight 1.0 --agent.aux-value-weight 1.0 --agent.aux-value-anneal-start 3000 --agent.aux-value-anneal-end 6000
+# latent (the setting of the 96.9% run: no failure head)
+instinct-train Instinct-Perceptive-Shadowing-Latent-G1-v0 --num-envs 1024
+# render (plan D + value head annealed 3000 -> 6000)
+instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024
 ```
+
+Both run 8000 iterations; any field can still be overridden with `--agent.<field>`. `Instinct-Perceptive-Shadowing-G1-v0` keeps the
+plain defaults (render, encoder trained by the policy gradient) for older runs; evaluation and play use it for every run (same env
+and policy network).
 
 `latent` excludes `encoder_policy_grad` != 1, `aux_recon_weight` > 0, `aux_value_weight` > 0 and `latent_policy_grad` != 0 (they act on
 the rendered path; setting them raises a `ValueError`); `render` ignores the `latent_*` fields. The rest of this README describes
@@ -110,8 +113,7 @@ flags replace that signal, all training-only (the exported policy is unchanged):
   `--agent.aux-value-anneal-end` (as in Kickstarting): annealed 3000 -> 6000 it reaches 94.9% at 8000 (3 seeds x 256 envs).
 
 ```bash
-instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.max-iterations 8000 --agent.encoder-policy-grad 0 \
-    --agent.aux-recon-weight 1.0 --agent.aux-value-weight 1.0 --agent.aux-value-anneal-start 3000 --agent.aux-value-anneal-end 6000
+instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024   # = these flags on Instinct-Perceptive-Shadowing-G1-v0
 ```
 
 **Failure head** (optional, on by default): a continue predictor on privileged features, combined with the analytic soft
