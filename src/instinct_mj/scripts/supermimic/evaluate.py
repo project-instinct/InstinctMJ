@@ -55,7 +55,7 @@ from instinct_mj.tasks.registry import (
 )
 from instinct_mj.tasks.shadowing.perceptive.perceptive_env_cfg import make_terminations
 
-PLAY_TASK = "Instinct-Perceptive-Shadowing-G1-Play-v0"
+PLAY_TASK = "Instinct-Perceptive-Shadowing-Render-G1-Play-v0"  # same env and policy network for both vision methods
 FAILURE_TERMS = ("base_pos_too_far", "base_pg_too_far", "link_pos_too_far", "illegal_reset_contact", "out_of_border")
 SUCCESS_TERM = "dataset_exhausted"
 
@@ -94,7 +94,7 @@ class EvalArgs:
 
 
 def build_eval_cfg(args: EvalArgs, num_envs: int, render: bool = False):
-    cfg = load_env_cfg("Instinct-Perceptive-Shadowing-G1-v0", play=True)
+    cfg = load_env_cfg("Instinct-Perceptive-Shadowing-Render-G1-v0", play=True)
     cfg.seed = args.seed
     cfg.scene.num_envs = num_envs
     cfg.episode_length_s = args.episode_length_s

@@ -1,7 +1,7 @@
 """Helpers shared by the SuperMimic scripts / tests: dataset override and env construction for the perceptive shadowing task.
 
-Training and play go through the registry (``instinct-train`` / ``instinct-play`` with ``Instinct-Perceptive-Shadowing-G1-v0``
-/ ``-Play-v0``), whose runner is ``SuperMimicRunner``; the dataset is the task's ``MOTION_FOLDER``.
+Training and play go through the registry (``instinct-train`` / ``instinct-play`` with ``Instinct-Perceptive-Shadowing-Render-G1-v0`` /
+``-Latent-G1-v0`` and their ``-Play-v0``), whose runner is ``SuperMimicRunner``; the dataset is the task's ``MOTION_FOLDER``.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from instinct_mj.tasks.shadowing.perceptive.config.g1.perceptive_shadowing_cfg i
 )
 from instinct_mj.tasks.shadowing.perceptive.perceptive_env_cfg import make_curriculum, make_events
 
-TASK_ID = "Instinct-Perceptive-Shadowing-G1-v0"
+TASK_ID = "Instinct-Perceptive-Shadowing-Render-G1-v0"
 
 
 def apply_motion_folder(cfg, motion_folder: str | None, restore_baseline_sampling: bool = True) -> None:

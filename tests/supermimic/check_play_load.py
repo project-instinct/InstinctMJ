@@ -35,6 +35,6 @@ def load_env_cfg_with_dataset(task_id, play=False):
 
 play.load_env_cfg = load_env_cfg_with_dataset
 play.run_play(
-    "Instinct-Perceptive-Shadowing-G1-Play-v0",
+    "Instinct-Perceptive-Shadowing-Render-G1-Play-v0",
     play.PlayConfig(checkpoint_file=args.checkpoint, viewer="none", max_steps=args.steps, export_onnx=True),
 )

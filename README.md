@@ -42,13 +42,13 @@ Download from the [SuperMimic release](https://github.com/project-instinct/Insti
 
 ```bash
 # train
-uv run instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024
+uv run instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024   # or ...-Latent-G1-v0
 # evaluate (success rate per motion)
 uv run python -m instinct_mj.scripts.supermimic.evaluate --checkpoint <run>/model_<it>.pt --motion-folder ~/Datasets/20251116_50cm_kneeClimbStep1 --num-envs 128
 # web viewer (viser)
 uv run python webplay_supermimic.py <run>/model_<it>.pt
 # play + ONNX export
-uv run instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --checkpoint-file <run>/model_<it>.pt --viewer none --export-onnx True
+uv run instinct-play Instinct-Perceptive-Shadowing-Render-G1-Play-v0 --checkpoint-file <run>/model_<it>.pt --viewer none --export-onnx True
 ```
 
 Runs are written to `logs/instinct_rl/g1_perceptive_shadowing/`.

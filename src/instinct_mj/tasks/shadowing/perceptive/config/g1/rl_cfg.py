@@ -326,10 +326,6 @@ class G1PerceptiveVaePPORunnerCfg(InstinctRlOnPolicyRunnerCfg):
         )
 
 
-def g1_perceptive_shadowing_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
-    return G1PerceptiveShadowingRunnerCfg()
-
-
 def g1_perceptive_shadowing_latent_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
     """SuperMimic with the ``latent`` vision method: the world model predicts the visual latent of the depth encoder, which is
     trained by a reconstruction decoder; nothing is rendered in imagination. Setting of the 96.9% run (no failure head)."""
@@ -357,7 +353,8 @@ def g1_perceptive_shadowing_render_instinct_rl_cfg() -> InstinctRlOnPolicyRunner
 
 
 def g1_perceptive_shadowing_one_motion_instinct_rl_cfg() -> InstinctRlOnPolicyRunnerCfg:
-    cfg = G1PerceptiveShadowingRunnerCfg()
+    cfg = g1_perceptive_shadowing_render_instinct_rl_cfg()
+    cfg.max_iterations = G1PerceptiveShadowingRunnerCfg.max_iterations
     cfg.experiment_name = "g1_perceptive_shadowing_one_motion"
     return cfg
 

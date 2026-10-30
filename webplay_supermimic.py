@@ -67,4 +67,4 @@ def _patched_rl_cfg(task_id):
 
 playmod.load_instinct_rl_cfg = _patched_rl_cfg
 cfg = PlayConfig(viewer="viser", num_envs=1, checkpoint_file=CKPT)
-run_play("Instinct-Perceptive-Shadowing-G1-v0", cfg)
+run_play("Instinct-Perceptive-Shadowing-Render-G1-v0", cfg)  # same env and policy network for both vision methods

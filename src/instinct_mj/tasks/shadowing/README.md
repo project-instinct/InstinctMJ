@@ -73,8 +73,9 @@ instinct-play Instinct-Shadowing-WholeBody-Plane-G1-Play-v0 --load-run <run_name
 ### Perceptive Shadowing
 
 **Task IDs:**
-- `Instinct-Perceptive-Shadowing-G1-v0` (train)
-- `Instinct-Perceptive-Shadowing-G1-Play-v0` (play)
+- `Instinct-Perceptive-Shadowing-Render-G1-v0` / `Instinct-Perceptive-Shadowing-Latent-G1-v0` (train; the two SuperMimic vision
+  methods, see `src/instinct_mj/rl/supermimic/README.md`)
+- `Instinct-Perceptive-Shadowing-Render-G1-Play-v0` / `Instinct-Perceptive-Shadowing-Latent-G1-Play-v0` (play)
 
 1. Go to `perceptive/config/g1/perceptive_shadowing_cfg.py` and update the local dataset root here:
 
@@ -88,12 +89,12 @@ instinct-play Instinct-Shadowing-WholeBody-Plane-G1-Play-v0 --load-run <run_name
 
 2. Train the policy:
 ```bash
-instinct-train Instinct-Perceptive-Shadowing-G1-v0
+instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0
 ```
 
 3. Play trained policy (`--load-run` is required; absolute path is recommended, or use `--agent random` for an untrained policy):
 ```bash
-instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --load-run <run_name>
+instinct-play Instinct-Perceptive-Shadowing-Render-G1-Play-v0 --load-run <run_name>
 ```
 
 4. Current maintained setup notes in this workspace (as of `2026-03-09`):
@@ -102,7 +103,7 @@ instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --load-run <run_name>
     - Play command:
 
 ```bash
-instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 \
+instinct-play Instinct-Perceptive-Shadowing-Render-G1-Play-v0 \
   --load-run <downloaded_run_dir> \
   --checkpoint-file <checkpoint_file>
 ```

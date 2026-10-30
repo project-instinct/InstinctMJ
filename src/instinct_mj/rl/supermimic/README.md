@@ -18,15 +18,14 @@ instinct-train Instinct-Perceptive-Shadowing-Latent-G1-v0 --num-envs 1024
 instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024
 ```
 
-Both run 8000 iterations; any field can still be overridden with `--agent.<field>`. `Instinct-Perceptive-Shadowing-G1-v0` keeps the
-plain defaults (render, encoder trained by the policy gradient) for older runs; evaluation and play use it for every run (same env
-and policy network).
+Both run 8000 iterations; any field can still be overridden with `--agent.<field>`. Evaluation and play load the policy of either
+method (same env and policy network).
 
 `latent` excludes `encoder_policy_grad` != 1, `aux_recon_weight` > 0, `aux_value_weight` > 0 and `latent_policy_grad` != 0 (they act on
 the rendered path; setting them raises a `ValueError`); `render` ignores the `latent_*` fields. The rest of this README describes
 the `render` method.
 
-Trains the depth policy of `Instinct-Perceptive-Shadowing-G1-v0` inside a learned world model, following
+Trains the depth policy of the perceptive shadowing task inside a learned world model, following
 [SuperMimic](https://arxiv.org/abs/2610.28480) (Liao et al., CoRL 2026) and its open reproduction
 [supermimic_vibed](https://github.com/zita-ch/supermimic_vibed) (MIT, Chong Zhang).
 
@@ -113,7 +112,7 @@ flags replace that signal, all training-only (the exported policy is unchanged):
   `--agent.aux-value-anneal-end` (as in Kickstarting): annealed 3000 -> 6000 it reaches 94.9% at 8000 (3 seeds x 256 envs).
 
 ```bash
-instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024   # = these flags on Instinct-Perceptive-Shadowing-G1-v0
+instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024   # these settings are in the task's agent cfg
 ```
 
 **Failure head** (optional, on by default): a continue predictor on privileged features, combined with the analytic soft
@@ -133,8 +132,8 @@ The dataset is the task's `MOTION_FOLDER` (default `~/Datasets/20251116_50cm_kne
 
 ```bash
 # train / resume (the replay buffer is refilled on resume)
-instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.max-iterations 8000
-instinct-train Instinct-Perceptive-Shadowing-G1-v0 --num-envs 1024 --agent.load-run <run> --agent.load-checkpoint model_<it>.pt
+instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024   # or Instinct-Perceptive-Shadowing-Latent-G1-v0
+instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024 --agent.load-run <run> --agent.load-checkpoint model_<it>.pt
 # evaluate (results in <run>/eval/; --run-dir <run> --watch evaluates every new checkpoint, --video-only records videos)
 python -m instinct_mj.scripts.supermimic.evaluate --checkpoint <run>/model_<it>.pt --motion-folder <dataset> --num-envs 128
 # viser web viewer
