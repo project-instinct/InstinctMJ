@@ -12,7 +12,7 @@ the depth image of every imagined state from the known scene by ray casting (MuJ
 lets the world model predict the latent of the policy's depth encoder. InstinctMJ is the `mjlab` port of
 [InstinctLab](https://github.com/project-instinct/InstinctLab) ([Project-Instinct](https://project-instinct.github.io/)).
 
-![render method](src/instinct_mj/rl/supermimic/assets/render_method.png)
+![two vision methods](src/instinct_mj/rl/supermimic/assets/two_methods.png)
 
 One RTX 3090, 1024 environments, 8000 iterations, the 10 motions of the released dataset (diveroll, knee climb onto a 50 cm step,
 jump-sit, roll vault): **94.9% success** with the Render task, **96.9%** with the Latent task. Method, results and configuration:

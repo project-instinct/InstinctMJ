@@ -28,11 +28,13 @@ Both run 8000 iterations; any field can still be overridden with `--agent.<field
 reconstruction is what trains the depth encoder); `latent` rejects `aux_recon_weight` > 0, `aux_value_weight` > 0 and
 `latent_policy_grad` != 0 (a `ValueError` is raised); `render` ignores the `latent_*` fields. The rest of this README describes the `render` method unless stated otherwise.
 
-![render method](assets/render_method.png)
+![two vision methods](assets/two_methods.png)
 
-The render method in imagination: the renderer casts the depth image of the predicted state, the CNN encoder's feature enters the
-actor through a stop-gradient, the actor's action drives the (frozen) world model to the next state. The policy gradient trains the
-actor only; the reconstruction gradient (decoder, training only, on real buffered states) trains the encoder and the decoder.
+One imagination step of each method. (a) Render: the renderer casts the depth image of the predicted robot state, the CNN
+encoder's feature enters the actor through a stop-gradient, the action drives the (frozen) world model to the next state. (b) Latent:
+the CNN encodes the real depth image of the start state once, the world model predicts the next state and latent. In both, the
+policy gradient trains the actor only; the encoder is trained by a training-only decoder (reconstruction of the clean image), in
+(a) together with a value head annealed to 0.
 
 ## Results
 
