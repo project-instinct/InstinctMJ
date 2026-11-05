@@ -1542,6 +1542,76 @@ def stl_heightfield_terrain(
     return TerrainOutput(origin=origin, geometries=[hfield_geom])
 
 
+_PRIMITIVE_TERRAIN_GEOMS = {
+    "box": (mujoco.mjtGeom.mjGEOM_BOX, 3),  # (MuJoCo type, number of size entries): half extents
+    "cylinder": (mujoco.mjtGeom.mjGEOM_CYLINDER, 2),  # radius, half length
+    "capsule": (mujoco.mjtGeom.mjGEOM_CAPSULE, 2),  # radius, half length
+}
+PRIMITIVE_TERRAIN_TOLERANCE = 0.02
+"""A primitive may stick out of the tile footprint by this much [m] (axis-aligned boxes are clipped to it, any other must fit)."""
+
+
+def _geom_aabb_half_extent(geom_type: str, size: np.ndarray, rot: np.ndarray) -> np.ndarray:
+    """Half extent (3,) of the world-axis aligned bounding box of a primitive with rotation matrix ``rot`` (geom local z = cylinder / capsule axis)."""
+    if geom_type == "box":
+        return np.abs(rot) @ size
+    radius, half = size[0], size[1]
+    axis = np.abs(rot[:, 2])
+    if geom_type == "capsule":
+        return half * axis + radius
+    return half * axis + radius * np.sqrt(np.clip(1.0 - axis**2, 0.0, 1.0))
+
+
+def _add_primitive_terrain_geoms(
+    cfg: mesh_terrains_cfg.MotionMatchedTerrainCfg, spec: mujoco.MjSpec, geoms_abspath: str
+) -> list[TerrainGeometry]:
+    """Add the primitive geoms of a ``<terrain>.geoms.yaml`` (a list of {type: box | cylinder | capsule, pos, quat (wxyz), size (MuJoCo
+    convention)} in the frame of the terrain STL, i.e. centred on the tile) as static world geoms of the terrain body, at the tile placement of
+    the STL (centre of the tile footprint). Exact collisions and rays, no convex decomposition. Axis-aligned boxes are clipped to the tile
+    footprint (as ``crop_to_size`` crops the STL), primitives entirely outside it are dropped, any other must lie inside it."""
+    with open(geoms_abspath) as file:
+        entries = yaml.safe_load(file)
+    if not isinstance(entries, list) or len(entries) == 0:
+        raise ValueError(f"{geoms_abspath}: expected a non-empty list of primitive geoms.")
+    half_tile = np.array([cfg.size[0] / 2, cfg.size[1] / 2])
+    centre = np.array([cfg.size[0] / 2, cfg.size[1] / 2, 0.0])
+    geometries: list[TerrainGeometry] = []
+    for i, entry in enumerate(entries):
+        kind = entry["type"]
+        if kind not in _PRIMITIVE_TERRAIN_GEOMS:
+            raise ValueError(f"{geoms_abspath}[{i}]: unsupported type '{kind}', expected one of {list(_PRIMITIVE_TERRAIN_GEOMS)}.")
+        mj_type, num_size = _PRIMITIVE_TERRAIN_GEOMS[kind]
+        pos = np.asarray(entry["pos"], dtype=np.float64)
+        quat = np.asarray(entry.get("quat", [1.0, 0.0, 0.0, 0.0]), dtype=np.float64)
+        size = np.asarray(entry["size"], dtype=np.float64)
+        if pos.shape != (3,) or quat.shape != (4,) or size.shape != (num_size,):
+            raise ValueError(f"{geoms_abspath}[{i}]: a {kind} needs pos (3), quat (4) and size ({num_size}).")
+        quat = quat / np.linalg.norm(quat)
+        rot = np.zeros(9)
+        mujoco.mju_quat2Mat(rot, quat)
+        rot = rot.reshape(3, 3)
+        extent = _geom_aabb_half_extent(kind, size, rot)
+        lo, hi = pos[:2] - extent[:2], pos[:2] + extent[:2]
+        if np.any(hi <= -half_tile) or np.any(lo >= half_tile):
+            continue  # entirely outside the tile: cropped away, as the STL is by ``crop_to_size``
+        if kind == "box" and np.allclose(rot, np.eye(3), atol=1e-6):
+            lo, hi = np.maximum(lo, -half_tile), np.minimum(hi, half_tile)
+            pos[:2], size[:2] = (lo + hi) / 2, (hi - lo) / 2
+        elif np.any(lo < -half_tile - PRIMITIVE_TERRAIN_TOLERANCE) or np.any(hi > half_tile + PRIMITIVE_TERRAIN_TOLERANCE):
+            raise ValueError(
+                f"{geoms_abspath}[{i}]: the {kind} reaches [{lo[0]:.2f}, {hi[0]:.2f}] x [{lo[1]:.2f}, {hi[1]:.2f}] m, outside the "
+                f"{cfg.size[0]} x {cfg.size[1]} m tile."
+            )
+        geom = spec.body("terrain").add_geom(
+            type=mj_type, size=np.pad(size, (0, 3 - num_size)).tolist(), pos=(pos + centre).tolist(), quat=quat.tolist(),
+            group=0, contype=1, conaffinity=1,
+        )  # fmt: skip
+        geometries.append(TerrainGeometry(geom=geom))
+    if len(geometries) == 0:
+        raise ValueError(f"{geoms_abspath}: no primitive lies inside the {cfg.size[0]} x {cfg.size[1]} m tile.")
+    return geometries
+
+
 def motion_matched_terrain(
     cfg: mesh_terrains_cfg.MotionMatchedTerrainCfg,
     difficulty: float,
@@ -1567,11 +1637,18 @@ def motion_matched_terrain(
     terrains = data["terrains"]  # order matters
 
     if cfg.collision_coacd:
-        # Precompute missing CoACD caches once to better utilize multi-core CPU.
-        _prewarm_coacd_disk_cache(cfg, terrains)
+        # Precompute missing CoACD caches once to better utilize multi-core CPU (terrains given as primitive geoms need none).
+        _prewarm_coacd_disk_cache(cfg, [t for t in terrains if "terrain_geoms" not in t])
 
     terrain_idx = int(np.clip(difficulty * len(terrains), 0, len(terrains) - 1))
     selected_terrain = terrains[terrain_idx]
+
+    if "terrain_geoms" in selected_terrain:
+        # The terrain is given as primitive geoms (exact collision and ray casts); ``terrain_file`` (STL) stays for viewing and labeling.
+        if not cfg.use_input_origin_frame:
+            raise ValueError("Primitive terrain geoms are placed in the input frame: set use_input_origin_frame=True.")
+        geometries = _add_primitive_terrain_geoms(cfg, spec, os.path.join(cfg.path, selected_terrain["terrain_geoms"]))
+        return TerrainOutput(origin=np.array([cfg.size[0] / 2, cfg.size[1] / 2, 0.0]), geometries=geometries)
 
     terrain_file = selected_terrain["terrain_file"]
     terrain_abspath = os.path.join(cfg.path, terrain_file)
