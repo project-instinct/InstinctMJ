@@ -84,17 +84,19 @@ class WorldModel(nn.Module):
     (the latent of the policy's depth encoder). z is normalized with running statistics kept here (``update_z_stats``).
     With ``z_dim = 0`` there is no latent: ``step`` takes ``z=None`` and returns ``None`` in its place."""
 
-    def __init__(self, scan_dim: int, num_contact: int, xi_dim: int, z_dim: int = 0, hidden=(2048, 2048, 2048)):
+    def __init__(self, scan_dim: int, num_contact: int, xi_dim: int, z_dim: int = 0, hidden=(2048, 2048, 2048), num_joints: int = NUM_J):
         super().__init__()
-        self.in_dim = INV_DIM + NUM_J + xi_dim + scan_dim
+        self.num_joints = num_joints
+        self.wm_out = 12 + 2 * num_joints  # state increments: position, rotation, lin vel, ang vel (3 each), joint pos, joint vel
+        self.in_dim = (12 + 2 * num_joints) + num_joints + xi_dim + scan_dim  # invariant features + action + context + scan
         self.num_contact, self.z_dim = num_contact, z_dim
-        self.net = mlp(self.in_dim + z_dim, list(hidden), WM_OUT + num_contact + z_dim, act=nn.SiLU, layer_norm=True)
+        self.net = mlp(self.in_dim + z_dim, list(hidden), self.wm_out + num_contact + z_dim, act=nn.SiLU, layer_norm=True)
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
         with torch.no_grad():
-            self.net[-1].bias[WM_OUT : WM_OUT + num_contact] = -3.0  # contacts are rare
+            self.net[-1].bias[self.wm_out : self.wm_out + num_contact] = -3.0  # contacts are rare
         self.in_norm = RunningNorm(self.in_dim)
-        self.out_norm = RunningNorm(WM_OUT, eps=1e-4)
+        self.out_norm = RunningNorm(self.wm_out, eps=1e-4)
         self.register_buffer("z_mean", torch.zeros(z_dim))
         self.register_buffer("z_std", torch.ones(z_dim))
         self.register_buffer("dz_std", torch.ones(z_dim))
@@ -135,15 +137,15 @@ class WorldModel(nn.Module):
         p, R, v, w, q, qd = S
         x = self.in_norm(self.inputs(S, a, xi_n, scan))
         y = run_mlp(self.net, x if self.z_dim == 0 else torch.cat((x, (z - self.z_mean) / self.z_std), -1))
-        d = y[..., :WM_OUT] * self.out_norm.std() + self.out_norm.mean
+        d = y[..., : self.wm_out] * self.out_norm.std() + self.out_norm.mean
         H = yaw_mat(R)
-        dp, dth, dv, dw, dq, dqd = d.split((3, 3, 3, 3, NUM_J, NUM_J), -1)
+        dp, dth, dv, dw, dq, dqd = d.split((3, 3, 3, 3, self.num_joints, self.num_joints), -1)
         p1 = p + mv(H, dp)
         R1 = mm(R, so3_exp(dth))
         v1 = v + mv(R, dv)
         w1 = w + mv(R, dw)
-        z1 = None if self.z_dim == 0 else z + y[..., WM_OUT + self.num_contact :] * self.dz_std
-        return (p1, R1, v1, w1, q + dq, qd + dqd), y[..., WM_OUT : WM_OUT + self.num_contact], z1
+        z1 = None if self.z_dim == 0 else z + y[..., self.wm_out + self.num_contact :] * self.dz_std
+        return (p1, R1, v1, w1, q + dq, qd + dqd), y[..., self.wm_out : self.wm_out + self.num_contact], z1
 
     @staticmethod
     def state_error(S_hat, S):

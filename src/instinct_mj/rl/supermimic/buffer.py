@@ -70,7 +70,7 @@ class ReplayBuffer:
         """Map age-ordered time index (0 = oldest) to the storage row."""
         return (self.ptr - self.size + age) % self.T
 
-    def sample_windows(self, B: int, k: int, env_range: tuple[int, int] | None = None, failure_frac: float = 0.0, failure_horizon: int = 16):
+    def sample_windows(self, B: int, k: int, env_range: tuple[int, int] | None = None, failure_frac: float = 0.0, failure_horizon: int = 16, failure_first_done: bool = False):
         """k-step windows; returns dict of (B, k, ...) tensors, the env index (B,), a validity mask (B, k) and, for the
         importance-weighted heads, ``weight`` (B,) that undoes the failure oversampling.
 
@@ -92,6 +92,12 @@ class ReplayBuffer:
             t0_all = torch.arange(n_win, device=self.device)
             t1_all = (t0_all + failure_horizon).clamp(max=self.size)
             fail_set = (cum[t1_all] - cum[t0_all]) > 0  # (n_win, n_env)
+            if failure_first_done:  # only a termination that is the FIRST episode end at or after the window start (within the window) counts: a later one belongs to the next episode, the loss mask drops it
+                rows_idx = torch.arange(self.size, device=self.device).unsqueeze(1).expand(self.size, n_env)
+                done_rows = self.data["done"][rows_all][:, lo:hi]
+                first_done = torch.where(done_rows, rows_idx, torch.full_like(rows_idx, 2 * self.size)).flip(0).cummin(0).values.flip(0)  # row of the first done at or after every row
+                fd = first_done[:n_win]
+                fail_set = (fd < (torch.arange(n_win, device=self.device).unsqueeze(1) + min(failure_horizon, k))) & torch.gather(term, 0, fd.clamp(max=self.size - 1)).bool()
             n_failure_windows = fail_set.sum()
             probs = torch.where(n_failure_windows > 0, fail_set.flatten().float(), torch.ones(n_win * n_env, device=self.device))
             pick = torch.multinomial(probs, n_fail, replacement=True)
@@ -111,6 +117,11 @@ class ReplayBuffer:
         out["mask"] = torch.cumprod(torch.cat((torch.ones(B, 1, device=self.device), 1 - d[:, :-1]), -1), -1)
         out["env"], out["age0"] = env, t0
         out["weight"] = weight
+        if n_fail > 0:  # windows in the failure set, and those with a real termination inside their valid rows
+            valid_fail = ((out["terminated"].float() * out["mask"]).sum(-1) > 0)
+            out["failure_sampled"], out["failure_valid"] = in_fail.float().sum(), (in_fail & valid_fail).float().sum()
+        else:
+            out["failure_sampled"] = out["failure_valid"] = torch.zeros((), device=self.device)
         return out
 
     def eligible_starts(

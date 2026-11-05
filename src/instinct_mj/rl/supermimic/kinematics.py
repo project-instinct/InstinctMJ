@@ -18,13 +18,14 @@ from .rotations import axis_angle_to_mat, mm, mv, quat_to_mat
 
 
 class G1Kinematics:
-    def __init__(self, device: str, joint_names: list[str], tracked: list[str]):
+    def __init__(self, device: str, joint_names: list[str], tracked: list[str], mjcf_path: str = G1_MJCF_PATH):
         """
         Args:
             joint_names: joint order of the simulator (``robot.joint_names``), used for ``q`` / ``qd``.
             tracked: bodies (names without namespace prefix) returned by :meth:`forward`, in order.
+            mjcf_path: the G1 MJCF (its root body is the free-joint body whose pose ``forward`` takes; default: the torso-rooted popsicle).
         """
-        m = mujoco.MjModel.from_xml_path(G1_MJCF_PATH)
+        m = mujoco.MjModel.from_xml_path(mjcf_path)
         self.device = device
         jname_to_idx = {n: i for i, n in enumerate(joint_names)}
         bodies, parent, joint_idx, axes, offs_p, offs_R = [], [], [], [], [], []

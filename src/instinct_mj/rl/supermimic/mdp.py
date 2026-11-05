@@ -40,7 +40,8 @@ def flatten_state(S) -> torch.Tensor:
 
 
 def unflatten_state(x: torch.Tensor):
-    return x[..., 0:3], quat_to_mat(x[..., 3:7]), x[..., 7:10], x[..., 10:13], x[..., 13:42], x[..., 42:71]
+    nj = (x.shape[-1] - 13) // 2  # number of joints of the robot (29 for the G1 of the shadowing tasks)
+    return x[..., 0:3], quat_to_mat(x[..., 3:7]), x[..., 7:10], x[..., 10:13], x[..., 13 : 13 + nj], x[..., 13 + nj : 13 + 2 * nj]
 
 
 DEPTH_SHAPE = (1, 18, 32)  # processed depth image of the task's policy group (C, H, W)
