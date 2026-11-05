@@ -1,0 +1,5 @@
+node_modules/
+__pycache__/
+# 由 `npm run build` 从 src/*.ts 生成
+static/app.js
+static/ui.js

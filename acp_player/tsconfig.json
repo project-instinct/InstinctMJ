@@ -1,0 +1,30 @@
+{
+  // 源码在 src/，tsc 直接输出到 static/（浏览器原生 ESM，没有打包器）。
+  // strictNullChecks 关闭：DOM / 全局状态里大量“载入后才非空”的字段，逐个断言只会更吵；
+  // 其余 strict 检查（noImplicitAny、strictFunctionTypes 等）保持开启。
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "rootDir": "src",
+    "outDir": "static",
+    "strict": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "sourceMap": false,
+    "newLine": "lf",
+    "strictNullChecks": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts"
+  ]
+}

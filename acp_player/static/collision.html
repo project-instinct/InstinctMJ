@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACP G1 碰撞模型</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #141416; color: #dcdcdc; font: 14px/1.5 system-ui, "Noto Sans CJK SC", sans-serif; }
+  header { padding: 18px 22px 6px; }
+  h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
+  p { margin: 4px 0; color: #a9a9b0; }
+  .legend { display: flex; gap: 18px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  main { padding: 8px 22px 28px; }
+  figure { margin: 22px 0 0; }
+  figcaption { color: #b9b9c0; margin-bottom: 8px; }
+  a img { display: block; width: 100%; max-width: 1400px; height: auto; border: 1px solid #2a2a30; border-radius: 4px; }
+  code { color: #c8d6a0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ACP G1 · 碰撞体</h1>
+  <p>当前仓库 <code>assets/acp_g1.py</code> 生成的模型：腿和 7 个脚 capsule 保持作者原样，上身 / 手臂的碰撞网格换成解析 capsule / sphere（<code>simplified_collision=True</code>）。</p>
+  <div class="legend">
+    <span><span class="dot" style="background:#999fb0"></span>作者的碰撞网格 / 脚 capsule（未改）</span>
+    <span><span class="dot" style="background:#26d14c"></span>新的解析 primitive（capsule / sphere）</span>
+    <span style="color:#8b8b93">碰撞体之外不显示视觉网格的列 = 只画 collision</span>
+  </div>
+</header>
+<main>
+  <figure>
+    <figcaption>① 视觉网格 | 原碰撞 | 简化碰撞（5 组视角：全身 / 上身 / 左手 / 左肘 / 腿脚）</figcaption>
+    <a href="/static/g1_collision_simplified.png" target="_blank"><img src="/static/g1_collision_simplified.png" alt="visual vs original vs simplified collision"></a>
+  </figure>
+  <figure>
+    <figcaption>② 只画碰撞体（原版 vs 简化）：全身 / 上身 / 左肩 / 左肘 / 左肘弯 90° + 手到髋部</figcaption>
+    <a href="/static/g1_collision_only.png" target="_blank"><img src="/static/g1_collision_only.png" alt="collision geoms only, original vs simplified"></a>
+  </figure>
+  <figure>
+    <figcaption>③ 旧图：原碰撞网格的特写（上身 / 手 / 脚）</figcaption>
+    <a href="/static/g1_collision.png" target="_blank"><img src="/static/g1_collision.png" alt="original collision close-ups"></a>
+  </figure>
+</main>
+</body>
+</html>
