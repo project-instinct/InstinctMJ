@@ -1,7 +1,7 @@
 """Realtime ACP reference browser and policy playback (no video recording).
 
   uv run --no-sync python webplay_acp.py refs --dataset /path/to/TerrainMotion
-  uv run --no-sync python webplay_acp.py policy [--checkpoint /path/to/model_100.pt] [--dataset ~/Datasets/acp/v3_train3] --port 8192 [--host 127.0.0.1]
+  uv run --no-sync python webplay_acp.py policy [--checkpoint /path/to/model_100.pt] [--dataset ~/Datasets/acp/v3_train6] --port 8192 [--host 127.0.0.1]
   uv run --no-sync python webplay_acp.py policy --checkpoint model_1500.pt --dataset /path/to/data --self-test
   uv run --no-sync python webplay_acp.py refs --dataset /path/to/TerrainMotion --self-test
 
@@ -1021,7 +1021,7 @@ def policy_playback(checkpoint: Path, port: int, dataset: Path, host: str = "127
   ALL_CLIPS = "(all clips, random)"
   device = "cuda:0" if torch.cuda.is_available() else "cpu"
   if simplified_collision:
-    # ``run_play`` builds the env cfg itself, so the opt-in collision spec (the same switch as ``G1AcpTrackEnvCfg(simplified_collision=True)``)
+    # ``run_play`` builds the env cfg itself, so the opt-in collision spec (the same switch as ``G1AcpTrackV1EnvCfg(simplified_collision=True)``)
     # is applied to the cfg it loads. Everything else -- contacts, rewards, observations, the checkpoint -- is unchanged.
     _load_env_cfg = playmod.load_env_cfg
 
@@ -1068,8 +1068,8 @@ def policy_playback(checkpoint: Path, port: int, dataset: Path, host: str = "127
       env = self.env.unwrapped
       self._motion = env.scene["motion_reference"].motion_buffers["TerrainMotion"]
       self._weights0 = self._motion._motion_weights.clone()
-      csi = env.curriculum_manager.get_term_cfg("curriculum_state_init").func
-      csi.mode = "start"  # every episode starts at phase 0 of its clip
+      start = env.curriculum_manager.get_term_cfg("episode_start").func
+      start.mode = "start"  # every episode starts at phase 0 of its clip
       self._names = [os.path.splitext(os.path.basename(f))[0] for f in self._motion._all_motion_files]
       groups = [e.get("group", "") for e in self._motion.yaml_data["motion_files"]]
       labels = sorted(f"{g} / {n}" for g, n in zip(groups, self._names))
@@ -1331,7 +1331,7 @@ def policy_playback(checkpoint: Path, port: int, dataset: Path, host: str = "127
   playmod.ViserPlayViewer = make_viewer
   announce(server.get_port())
   try:
-    run_play("Instinct-ACP-Track-SM-CH5-G1-Play-v0", PlayConfig(
+    run_play("Instinct-ACP-Track-G1-Play-v1", PlayConfig(
       viewer="viser", num_envs=1, checkpoint_file=str(checkpoint.expanduser().resolve()), video=False,
       max_steps=200 if self_test else None))
   finally:
@@ -1391,7 +1391,7 @@ def main() -> None:
   refs.add_argument("--also", type=Path, action="append", default=[], help="Also list this dataset in the dropdown (repeatable)")
   policy = subparsers.add_parser("policy", help="Stream a checkpoint using the registered ACP Play task")
   policy.add_argument("--checkpoint", type=Path, default=None, help="default: the newest logs/instinct_rl/g1_acp_track_final6/*/model_*.pt")
-  policy.add_argument("--dataset", type=Path, default=Path(os.environ.get("ACP_DATASET", "~/Datasets/acp/v3_train3")).expanduser())
+  policy.add_argument("--dataset", type=Path, default=Path(os.environ.get("ACP_DATASET", "~/Datasets/acp/v3_train6")).expanduser())
   policy.add_argument("--port", type=int, default=8192)
   policy.add_argument("--host", default="127.0.0.1", help="bind address of the viser server (0.0.0.0: reachable from other machines)")
   policy.add_argument("--clip", default=os.environ.get("ACP_CLIP", ""),

@@ -14,9 +14,13 @@ touching material points of a body that is not in touch (within the hover tolera
 relative to the (static) terrain - a body that hovers past the surface carries no load, a body that touches it does (sliding
 contacts still carry a normal force).
   1. Replay: qpos = [base_pos_w, base_quat_w (wxyz), joint_pos (mapped by joint name)] on the MJCF used by the tasks
-     (``instinct_mj.assets.acp_g1.get_acp_g1_spec()``: the ACP playground G1, free root = pelvis, 23 joints), ``mj_kinematics`` per frame.
-  2. Contact points of a body = the collision geoms of that link only (contype/conaffinity != 0): capsule/sphere/box surfaces are
-     sampled (mesh collision geoms of the playground G1 - links, half-sphere hand: the convex hull vertices of the mesh). Points are
+     (``instinct_mj.assets.acp_g1.get_acp_g1_spec()``: the ACP playground G1, free root = pelvis, 23 joints, the authors' collision
+     meshes; the task simulates the same geometry, so labels and simulation measure one surface - use ``--simplified-collision`` only
+     for the analytic capsule / sphere model of COLLISION_SIMPLIFY.md, with sidecars relabelled the same way), ``mj_kinematics`` per
+     frame.
+  2. Contact points of a body = the collision geoms of that link only (contype/conaffinity != 0): the playground G1's collision meshes
+     are sampled by their convex hull vertices (half-sphere hand); with ``--simplified-collision`` the analytic capsule / sphere
+     surfaces of the same links are sampled instead. Points are
      transformed to the world frame at each frame. The paper detects contacts on the links' collision geometry (the playground policy
      outputs one 3-D point per link, a 9 x 3 ``planner_contacts``), so a contact body is exactly one link: ``pelvis`` is the pelvis
      link, ``*_knee_link`` the knee link. Neighbour links are not folded in: the hip motors (``*_hip_pitch_link`` /
@@ -376,7 +380,8 @@ def _sample_geom(model: mujoco.MjModel, g: int) -> np.ndarray:
 
 class ContactLabeler:
     def __init__(self, simplified_collision: bool = False):
-        # the collision geometry the labels are measured on must be the one the task simulates (``G1AcpTrackEnvCfg.simplified_collision``)
+        # the collision geometry the labels are measured on must be the one the task simulates (``G1AcpTrackV1EnvCfg.simplified_collision``,
+        # default off): the authors' collision meshes, matching v3_final / v3_train6
         self.model = get_acp_g1_spec(simplified_collision=simplified_collision).compile()
         self.data = mujoco.MjData(self.model)
         self.geom_ids: list[np.ndarray] = []
@@ -653,9 +658,13 @@ def main():
     parser.add_argument("--quasi-static-v", type=float, default=QUASI_STATIC_V)
     parser.add_argument("--quasi-static-a", type=float, default=QUASI_STATIC_A)
     parser.add_argument(
-        "--simplified-collision", action="store_true",
-        help="measure the labels on the analytic collision primitives of the legs / upper body (the task's simplified_collision) "
-        "instead of the authors' collision meshes",
+        "--simplified-collision", dest="simplified_collision", action="store_true", default=False,
+        help="measure the labels on the analytic collision primitives of the legs / upper body (the task's simplified_collision, "
+        "default off) instead of the authors' collision meshes (matching v3_final / v3_train6)",
+    )
+    parser.add_argument(
+        "--mesh-collision", dest="simplified_collision", action="store_false",
+        help="measure on the authors' collision meshes (the default; ``G1AcpTrackV1EnvCfg.simplified_collision=False``)",
     )  # fmt: skip
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = ""  # CPU only (MuJoCo kinematics, warp BVH on the CPU): the GPU belongs to the training jobs

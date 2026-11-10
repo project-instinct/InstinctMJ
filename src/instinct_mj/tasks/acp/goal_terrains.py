@@ -15,6 +15,7 @@ and is marked ``# ACP-unspecified``.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import mujoco
@@ -374,17 +375,44 @@ def surface_height(boxes: list[Box], xy: np.ndarray, floor: float = -100.0) -> n
 class GoalArenaCfg:
     seed: int = 0
     """Seed of the tile randomization (the geometry is a deterministic function of the cfg)."""
-    origin: tuple[float, float] = (-63.0, 40.0)
-    """World position of the center of the tile (type 0, level 0). ACP-unspecified: levels along x, types along y, beside the motion terrains."""
+    origin: tuple[float, float] | None = None
+    """World position of the center of the tile (type 0, level 0). ``None`` (default): beside the reference tiles, from their actual grid: the arena
+    lies on the +y side of the reference grid rectangle, ``reference_gap`` away from it and centred on x = 0 (levels along x, types along y)."""
+    reference_gap: float = 10.0
+    """ACP-unspecified: clear distance [m] between the reference tile grid and the arena (the scans reach 3 m, the robot may fall off a tile edge)."""
     types: tuple[str, ...] = TERRAIN_TYPES
 
 
-class GoalArena:
-    """All tiles of the arena: ``tiles[type][level]``; tile id = ``type * NUM_LEVELS + level``."""
+def _spec_geom_aabb(geom) -> tuple[np.ndarray, np.ndarray] | None:
+    """World xy (lo, hi) of a box / cylinder / capsule geom of a (not yet compiled) spec, ``None`` for any other type."""
+    names = {mujoco.mjtGeom.mjGEOM_BOX: "box", mujoco.mjtGeom.mjGEOM_CYLINDER: "cylinder", mujoco.mjtGeom.mjGEOM_CAPSULE: "capsule"}
+    kind = names.get(geom.type)
+    if kind is None:
+        return None
+    quat = np.asarray(geom.quat, dtype=np.float64)
+    R = np.zeros(9)
+    mujoco.mju_quat2Mat(R, quat / np.linalg.norm(quat))
+    R = R.reshape(3, 3)
+    size = np.asarray(geom.size, dtype=np.float64)
+    if kind == "box":
+        half = np.abs(R) @ size
+    else:
+        axis = np.abs(R[:, 2])
+        half = size[1] * axis + size[0] * (1.0 if kind == "capsule" else np.sqrt(np.clip(1.0 - axis**2, 0.0, 1.0)))
+    pos = np.asarray(geom.pos, dtype=np.float64)
+    return pos[:2] - half[:2], pos[:2] + half[:2]
 
-    def __init__(self, cfg: GoalArenaCfg):
+
+class GoalArena:
+    """All tiles of the arena: ``tiles[type][level]``; tile id = ``type * NUM_LEVELS + level``.
+
+    ``reference_bounds`` (a callable returning the (lo, hi) xy rectangle of the reference tile grid) places the arena when ``cfg.origin`` is ``None``; it is
+    evaluated when the layout is used (spec build, tables), i.e. after the task cfg and the command line have fixed the tile size and count."""
+
+    def __init__(self, cfg: GoalArenaCfg, reference_bounds: Callable[[], tuple[np.ndarray, np.ndarray]] | None = None):
         self.cfg = cfg
         self.types = cfg.types
+        self._reference_bounds = reference_bounds
         rng = np.random.default_rng(cfg.seed)
         self.tiles: list[list[GoalTile]] = []
         for name in self.types:
@@ -394,18 +422,47 @@ class GoalArena:
     def num_types(self) -> int:
         return len(self.types)
 
+    @property
+    def origin(self) -> np.ndarray:
+        """World xy of the center of the tile (type 0, level 0)."""
+        if self.cfg.origin is not None:
+            return np.asarray(self.cfg.origin, dtype=np.float64)
+        if self._reference_bounds is None:
+            raise ValueError("GoalArenaCfg.origin is None: the arena needs the reference tile grid (reference_bounds) to be placed.")
+        _, ref_hi = self._reference_bounds()
+        x_lo = -NUM_LEVELS * TILE_SIZE[0] / 2  # centred on the x = 0 line of the (origin-centred) reference grid
+        y_lo = ref_hi[1] + self.cfg.reference_gap
+        return np.array([x_lo + TILE_SIZE[0] / 2, y_lo + TILE_SIZE[1] / 2])
+
     def tile_center(self, type_idx: int, level: int) -> np.ndarray:
-        return np.array([self.cfg.origin[0] + level * TILE_SIZE[0], self.cfg.origin[1] + type_idx * TILE_SIZE[1], 0.0])
+        o = self.origin
+        return np.array([o[0] + level * TILE_SIZE[0], o[1] + type_idx * TILE_SIZE[1], 0.0])
 
     @property
     def bounds(self) -> tuple[np.ndarray, np.ndarray]:
         """(lo, hi) xy extent of the arena."""
-        lo = np.array(self.cfg.origin) - np.array(TILE_SIZE) / 2
-        hi = np.array(self.cfg.origin) + np.array([(NUM_LEVELS - 1) * TILE_SIZE[0], (self.num_types - 1) * TILE_SIZE[1]]) + np.array(TILE_SIZE) / 2
+        o = self.origin
+        lo = o - np.array(TILE_SIZE) / 2
+        hi = o + np.array([(NUM_LEVELS - 1) * TILE_SIZE[0], (self.num_types - 1) * TILE_SIZE[1]]) + np.array(TILE_SIZE) / 2
         return lo, hi
+
+    def check_disjoint(self, spec: mujoco.MjSpec | None = None) -> None:
+        """Assert that the arena rectangle does not intersect the reference tile grid and, with a ``spec``, none of the terrain geoms already in it
+        (the reference tiles); AABB test, so it is conservative. Called with the spec before the arena geoms are added."""
+        lo, hi = self.bounds
+        if self._reference_bounds is not None:
+            ref_lo, ref_hi = self._reference_bounds()
+            if np.all(lo < ref_hi) and np.all(ref_lo < hi):
+                raise AssertionError(f"Goal arena [{lo}, {hi}] overlaps the reference tile grid [{ref_lo}, {ref_hi}].")
+        if spec is not None:
+            for geom in spec.body("terrain").geoms:
+                box = _spec_geom_aabb(geom)
+                if box is not None and np.all(lo < box[1]) and np.all(box[0] < hi):
+                    raise AssertionError(f"Terrain geom {geom.name!r} at [{box[0]}, {box[1]}] overlaps the goal arena [{lo}, {hi}].")
 
     def add_to_spec(self, spec: mujoco.MjSpec) -> None:
         """Add the boxes of all tiles to the ``terrain`` body (geoms named ``arena_<n>``)."""
+        self.check_disjoint(spec)
         body = spec.body("terrain")
         n = 0
         for i in range(self.num_types):

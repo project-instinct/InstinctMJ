@@ -20,7 +20,7 @@ from instinct_mj.rl.acp.stage3_runner import ACPStage3Runner
 from instinct_mj.tasks.acp.config.g1.rl_stage3_cfg import G1AcpStage3RunnerCfg
 from instinct_mj.tasks.registry import load_env_cfg, load_env_cls
 
-TASK = "Instinct-ACP-Stage3-G1-v0"
+TASK = "Instinct-ACP-Stage3-G1-v1"
 
 
 def main() -> None:

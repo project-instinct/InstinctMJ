@@ -16,9 +16,10 @@ from instinct_mj.rl.supermimic.rotations import mm, mv
 
 
 class ACPKinematics(G1Kinematics):
-    def __init__(self, device: str, joint_names: list[str], tracked: list[str], mjcf_path: str):
+    def __init__(self, device: str, joint_names: list[str], tracked: list[str], mjcf_path: str, num_primary: int | None = None):
         """``tracked``: any bodies of the MJCF ``mjcf_path`` (names without namespace prefix), returned by :meth:`forward` in order; the root
-        body of the MJCF is the pelvis (the free-joint body)."""
+        body of the MJCF is the pelvis (the free-joint body). :meth:`forward` returns the first ``num_primary`` of them (default all; the contact links), :meth:`forward_all` all."""
+        self.num_primary = len(tracked) if num_primary is None else num_primary
         m = mujoco.MjModel.from_xml_path(mjcf_path)
         anchors: list[str] = []  # jointed bodies evaluated by the base class
         self._spec: list[tuple[int, torch.Tensor | None, torch.Tensor | None]] = []  # (anchor index, offset p, offset R)
@@ -43,6 +44,11 @@ class ACPKinematics(G1Kinematics):
         super().__init__(device, joint_names, anchors, mjcf_path)
 
     def forward(self, p, R, v, w, q, qd):
+        """The first ``num_primary`` (contact links) tracked bodies, see :meth:`forward_all`."""
+        n = self.num_primary
+        return tuple(x[:, :n] for x in self.forward_all(p, R, v, w, q, qd))
+
+    def forward_all(self, p, R, v, w, q, qd):
         """Positions (B, K, 3), rotations (B, K, 3, 3), link-origin velocities and angular velocities (B, K, 3) of the tracked
         bodies in the order of ``tracked``."""
         Pa, Ra, Va, Wa = super().forward(p, R, v, w, q, qd)

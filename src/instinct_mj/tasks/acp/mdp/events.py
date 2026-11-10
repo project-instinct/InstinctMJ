@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
 
-    from .curriculums import CurriculumStateInit
+    from .curriculums import EpisodeStart
     from .sensors import PelvisRayCastSensor
 
 
@@ -39,10 +39,25 @@ def randomize_odometry(
 def reset_motion_start_phase(
     env: ManagerBasedRlEnv,
     env_ids: torch.Tensor,
-    curriculum_name: str = "curriculum_state_init",
+    curriculum_name: str = "episode_start",
+    legal_start_max_penetration: float | None = None,
 ):
-    """Set the clip start time of the reset envs from the initialization phase (Curriculum State Initialization).
+    """Set the clip start time of the reset envs from the episode start term (SuperMimic reset bins / uniform / phase 0).
+
+    ``legal_start_max_penetration`` [m]: a start frame whose noise-free reference state penetrates the terrain by more than this is moved to the nearest legal frame of the
+    clip (``legal_start.LegalStarts``, measured once on the first call; the phase-0 starts of the evaluation mode are never moved), so that the fallback of the reset penetration
+    rejection (the noise-free reference) is itself clear of the terrain. The moved starts are counted in ``env.legal_start_stats`` (starts, moved).
 
     Must run after the motion reference reset (which samples the clip) and before the robot is reset to the reference."""
-    curriculum: CurriculumStateInit = env.curriculum_manager.get_term_cfg(curriculum_name).func
+    curriculum: EpisodeStart = env.curriculum_manager.get_term_cfg(curriculum_name).func
     curriculum.set_start_phase(env_ids)
+    if legal_start_max_penetration is None or curriculum.mode == "start":
+        return
+    legal = getattr(env, "legal_starts", None)
+    if legal is None:
+        from .legal_start import LegalStarts
+
+        legal = env.legal_starts = LegalStarts(env, legal_start_max_penetration, env.event_manager.get_term_cfg("reset_robot").params)
+        env.legal_start_stats = torch.zeros(2, dtype=torch.float64)
+        print(legal.report())
+    env.legal_start_stats += torch.tensor([len(env_ids), legal.snap_starts(curriculum.motion_buffer, env_ids)], dtype=torch.float64)

@@ -15,7 +15,9 @@ def label_episode(
     horizon: int = 75,
     footprint: tuple[tuple[float, float], tuple[float, float]] = ((-0.8, 0.8), (-0.5, 0.5)),
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """contact_force_z (T, 9), body_pos_w (T, 9, 3), base_pos_w (T, 3), base_yaw (T,), all at 50 Hz.
+    """contact_force_z (T, 9), body_pos_w (T, 9, 3), base_pos_w (T, 3), base_yaw (T,), all at 50 Hz. ``contact_force_z`` is the vertical contact force [N] (paper: Fz > 1 N);
+    with ``contact_detect = "sdf"`` the runner passes 2 x the contact indicator ``d_b < d_on_b`` of the same signed-distance function the env rewards use, which exceeds the
+    1 N threshold exactly where the body is in contact (and ``body_pos_w`` is the terrain point closest to the body, see ``ACPRunner.contact_measurement``).
 
     Returns target_pos (T, 9, 3) in the gravity-aligned, yaw-rotated, base-centered frame of each step and
     target_flag (T, 9). The target of step t is the position at the first contact onset in (t, t + horizon]."""

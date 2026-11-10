@@ -21,7 +21,6 @@ from mjlab.utils.lab_api.math import quat_apply_inverse, quat_from_euler_xyz, wr
 
 from instinct_mj.envs.mdp.events.motion_reference import reset_robot_state_by_reference
 from instinct_mj.envs.mdp.terminations.general import dataset_exhausted
-from instinct_mj.envs.mdp.terminations.motion_reference import link_pos_far_from_ref
 from instinct_mj.rl.acp.planner import CONTACT_LINKS
 from instinct_mj.tasks.acp.goal_terrains import BASE_STAND_HEIGHT, NUM_LEVELS, GoalArena, GoalArenaTables
 
@@ -285,6 +284,10 @@ track_contact_label_ref = _ref_only(acp_rewards.track_contact_label)
 track_contact_pos_base_ref = _ref_only(acp_rewards.track_contact_pos_base)
 track_contact_pos_global_ref = _ref_only(acp_rewards.track_contact_pos_global)
 track_planned_contact_ref = _ref_only(acp_rewards.track_planned_contact)
+track_body_pos_anchor_ref = _ref_only(acp_rewards.track_body_pos_anchor)
+track_body_ori_ref = _ref_only(acp_rewards.track_body_ori)
+track_body_lin_vel_ref = _ref_only(acp_rewards.track_body_lin_vel)
+track_body_ang_vel_ref = _ref_only(acp_rewards.track_body_ang_vel)
 
 
 def move2goal(
@@ -413,7 +416,6 @@ def _ref_only_termination(func):
 
 
 dataset_exhausted_ref_only = _ref_only_termination(dataset_exhausted)
-link_pos_far_from_ref_ref_only = _ref_only_termination(link_pos_far_from_ref)
 
 
 def pos_far_from_ref_ref_only(env: ManagerBasedRlEnv, command_name: str, goal_command_name: str = GOAL_COMMAND, **params) -> torch.Tensor:
@@ -422,6 +424,14 @@ def pos_far_from_ref_ref_only(env: ManagerBasedRlEnv, command_name: str, goal_co
 
 def projected_gravity_far_from_ref_ref_only(env: ManagerBasedRlEnv, command_name: str, goal_command_name: str = GOAL_COMMAND, **params) -> torch.Tensor:
     return acp_terminations.projected_gravity_far_from_ref(env, command_name, **params) & ~_goal_term(env, goal_command_name).is_goal
+
+
+def pos_xy_far_from_ref_ref_only(env: ManagerBasedRlEnv, command_name: str, goal_command_name: str = GOAL_COMMAND, **params) -> torch.Tensor:
+    return acp_terminations.pos_xy_far_from_ref(env, command_name, **params) & ~_goal_term(env, goal_command_name).is_goal
+
+
+def feet_far_from_ref_ref_only(env: ManagerBasedRlEnv, command_name: str, goal_command_name: str = GOAL_COMMAND, **params) -> torch.Tensor:
+    return acp_terminations.feet_far_from_ref(env, command_name, **params) & ~_goal_term(env, goal_command_name).is_goal
 
 
 def goal_time_out(env: ManagerBasedRlEnv, command_name: str = GOAL_COMMAND) -> torch.Tensor:

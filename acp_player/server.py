@@ -625,11 +625,14 @@ class Player:
           self.close_connection = True
 
       def _send(self, body: bytes, content_type: str, *, status: int = 200,
-                cache: str = "no-store", compress: bool = False) -> None:
+                cache: str = "no-store", compress: bool = False,
+                extra: dict | None = None) -> None:
         headers = {"Content-Type": content_type, "Cache-Control": cache}
         if compress and "gzip" in self.headers.get("Accept-Encoding", "") and len(body) > 1024:
           body = gzip.compress(body, 5)
           headers["Content-Encoding"] = "gzip"
+        if extra:
+          headers.update(extra)
         self.send_response(status)
         for key, value in headers.items():
           self.send_header(key, value)
@@ -708,9 +711,35 @@ class Player:
           self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
 
       def _file(self, path: Path, content_type: str) -> None:
-        stat = path.stat()
-        self._send(path.read_bytes(), content_type, cache="no-cache",
-                   compress=stat.st_size > 64 * 1024)
+        # iOS Safari refuses to play <video> unless the server honours Range,
+        # so static files answer byte ranges with 206 when asked.
+        size = path.stat().st_size
+        start, end, status = 0, max(size - 1, 0), 200
+        extra = {"Accept-Ranges": "bytes"}
+        raw = (self.headers.get("Range") or "").strip()
+        if size > 0 and raw.startswith("bytes=") and "," not in raw:
+          first, _, last = raw[len("bytes="):].strip().partition("-")
+          try:
+            if not first:
+              length = int(last)
+              if length > 0:
+                start, status = max(size - length, 0), 206
+            else:
+              start = int(first)
+              end = min(int(last), size - 1) if last else size - 1
+              status = 206
+          except ValueError:
+            start, end, status = 0, size - 1, 200
+          if status == 206 and (start >= size or start > end):
+            self._send(b"", content_type, status=416,
+                       extra={"Content-Range": f"bytes */{size}"})
+            return
+          extra["Content-Range"] = f"bytes {start}-{end}/{size}"
+        with open(path, "rb") as handle:
+          handle.seek(start)
+          body = handle.read(end - start + 1) if size else b""
+        self._send(body, content_type, cache="no-cache", status=status, extra=extra,
+                   compress=status == 200 and size > 64 * 1024)
 
       def do_HEAD(self) -> None:
         self.do_GET()

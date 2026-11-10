@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import torch
 from mjlab.actuator import BuiltinPdActuator
 from mjlab.managers import ManagerTermBase, SceneEntityCfg
-from mjlab.utils.lab_api.math import quat_error_magnitude, wrap_to_pi
+from mjlab.utils.lab_api.math import quat_apply, quat_conjugate, quat_error_magnitude, quat_mul, wrap_to_pi, yaw_quat
 from mjlab.utils.lab_api.string import resolve_matching_names_values
 
 from instinct_mj.envs.mdp.rewards.regularizations import _unwrap_base_actuator
@@ -21,8 +21,13 @@ if TYPE_CHECKING:
 
 
 def measured_contact_flags(env: ManagerBasedRlEnv, command_name: str, force_threshold: float = 1.0) -> torch.Tensor:
-    """c_meas_b = max over the sensor history window of |F_z| > threshold, (N, 9) bool."""
+    """c_meas_b, (N, 9) bool. ``env.cfg.contact_detect == "sdf"`` (default): the signed distance of the sphere approximation of the body to the terrain is below
+    ``d_on_b`` (``rl/acp/sdf_contact.py``), the same function the imagination relaxes; ``"force_head"``: max over the sensor history window of |F_z| > threshold."""
     term: AcpReferenceContacts = env.command_manager.get_term(command_name)
+    if getattr(env.cfg, "contact_detect", "force_head") == "sdf":
+        from instinct_mj.rl.acp.sdf_contact import env_contact_distance, get_sdf_contact
+
+        return get_sdf_contact(env).flags(env_contact_distance(env, term.contact_body_ids))
     force_z = term.contact_sensor.data.force_history[:, term.contact_sensor_ids, :, 2]  # (N, 9, H)
     return force_z.abs().amax(dim=-1) > force_threshold
 
@@ -115,6 +120,55 @@ def track_contact_pos_global(
     return torch.exp(-moving * err / sigma**2)
 
 
+def _track_anchor(term: AcpReferenceContacts):
+    """(robot body states of the tracked bodies, yaw rotation dR = yaw(R_root R*_root^T) (N, 4), reference positions re-anchored to (robot root xy, reference root z))."""
+    robot: Entity = term.robot
+    ids = term.track_body_ids
+    d_yaw = yaw_quat(quat_mul(term.base_quat_w, quat_conjugate(term.ref_base_quat_w)))
+    anchor = torch.cat((term.base_pos_w[:, :2], term.ref_base_pos_w[:, 2:3]), -1)
+    ref_pos = term.ref_track("link_pos_w")
+    rel = ref_pos - term.ref_base_pos_w.unsqueeze(1)
+    ref_bp = anchor.unsqueeze(1) + quat_apply(d_yaw.unsqueeze(1).expand(-1, rel.shape[1], -1), rel)
+    return robot, ids, d_yaw, ref_bp
+
+
+def track_body_pos_anchor(env: ManagerBasedRlEnv, command_name: str, sigma: float = 0.3) -> torch.Tensor:
+    """SuperMimic / BeyondMimic body-position reward (SuperMimic App. A Table A.2: sigma 0.3 m, weight 1; supermimic_vibed mdp.py:113-126) over the SuperMimic tracked bodies (``TRACKED_LINKS``: the nine
+    contact links + torso, hip-roll and shoulder-roll links; user decision 2026-11-07): the reference body positions are re-anchored to the robot, ``anchor = (robot root xy, reference root z)``,
+    ``dR = yaw(R_root R*_root^T)``, ``p*_b = anchor + dR (p_ref,b - p_ref,root)``, and ``r = exp(-mean_b |p*_b - p_b|^2 / sigma^2)``: the shape of the motion (relative to the robot's own
+    horizontal position and heading), not the drift of the root."""
+    term: AcpReferenceContacts = env.command_manager.get_term(command_name)
+    robot, ids, _, ref_bp = _track_anchor(term)
+    err = (ref_bp - robot.data.body_link_pos_w[:, ids]).square().sum(-1).mean(-1)
+    return torch.exp(-err / sigma**2)
+
+
+def track_body_ori(env: ManagerBasedRlEnv, command_name: str, sigma: float = 0.4) -> torch.Tensor:
+    """SuperMimic body-orientation reward (App. A Table A.2: sigma 0.4, weight 1; supermimic_vibed mdp.py:108-131; user decision 2026-11-07): ``exp(-mean_b angle(dR R*_b, R_b)^2 / sigma^2)`` over the
+    SuperMimic tracked bodies, ``dR = yaw(R_root R*_root^T)`` as in ``track_body_pos_anchor``."""
+    term: AcpReferenceContacts = env.command_manager.get_term(command_name)
+    robot, ids, d_yaw, _ = _track_anchor(term)
+    ref_q = quat_mul(d_yaw.unsqueeze(1).expand(-1, len(ids), -1), term.ref_track("link_quat_w"))
+    err = quat_error_magnitude(ref_q, robot.data.body_link_quat_w[:, ids]).square().mean(-1)
+    return torch.exp(-err / sigma**2)
+
+
+def track_body_lin_vel(env: ManagerBasedRlEnv, command_name: str, sigma: float = 1.0) -> torch.Tensor:
+    """SuperMimic body linear-velocity reward (sigma 1.0, weight 1; supermimic_vibed mdp.py:108-131; user decision 2026-11-07): ``exp(-mean_b |v*_b - v_b|^2 / sigma^2)`` over the SuperMimic tracked
+    bodies, world frame without the heading correction (as upstream)."""
+    term: AcpReferenceContacts = env.command_manager.get_term(command_name)
+    err = (term.ref_track("link_lin_vel_w") - term.robot.data.body_link_lin_vel_w[:, term.track_body_ids]).square().sum(-1).mean(-1)
+    return torch.exp(-err / sigma**2)
+
+
+def track_body_ang_vel(env: ManagerBasedRlEnv, command_name: str, sigma: float = 3.14) -> torch.Tensor:
+    """SuperMimic body angular-velocity reward (sigma 3.14, weight 1; supermimic_vibed mdp.py:108-131; user decision 2026-11-07): ``exp(-mean_b |w*_b - w_b|^2 / sigma^2)`` over the SuperMimic tracked
+    bodies, world frame."""
+    term: AcpReferenceContacts = env.command_manager.get_term(command_name)
+    err = (term.ref_track("link_ang_vel_w") - term.robot.data.body_link_ang_vel_w[:, term.track_body_ids]).square().sum(-1).mean(-1)
+    return torch.exp(-err / sigma**2)
+
+
 def track_planned_contact(env: ManagerBasedRlEnv, command_name: str, sigma: float = 1.0) -> torch.Tensor:
     """exp(-sum_b m_b |p_exec,B_b - p^_b|^2 / (sigma_c^2 max(1, sum_b m_b))), m_b = valid contact target mask.
 
@@ -195,7 +249,7 @@ def torque_limit_excess(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = Scen
 
 
 class contact_acc(ManagerTermBase):
-    """min(max_value, sum_b |p''_exec,W_b|): finite-difference acceleration of the 9 contact links over env steps. ``mode="pos2"``: the second difference of the link
+    """min(max_value, sum_b |p''_exec,W_b|) (Table 3): finite-difference acceleration of the 9 contact links over env steps. ``mode="pos2"``: the second difference of the link
     positions; ``mode="vel1"``: the difference of the link-origin world velocities (as the authors' framework, ``body_lin_acc_w``)."""
 
     def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):

@@ -2,7 +2,9 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>ACP · G1</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/style.css">
@@ -75,12 +77,23 @@
         <button id="reset-view">重置视角</button>
         <button id="snap">对准机器人</button>
       </div>
-      <p class="muted">左键拖动旋转，右键或 Shift 拖动平移，滚轮缩放。</p>
+      <p class="muted">左键拖动旋转，右键或 Shift 拖动平移，滚轮缩放；触屏单指旋转，双指缩放/平移。</p>
     </details>
+
+    <p class="muted" id="mobile-hint">数据集 / 片段选好后点画布或「收起」回到画面。</p>
 
   </aside>
 
+  <div id="scrim" hidden></div>
+  <button id="panel-toggle" type="button" aria-controls="panel" aria-expanded="false">☰ 控制</button>
+
   <main id="stage">
+    <div id="mobile-clipbar">
+      <button id="m-prev" type="button" aria-label="上一段">‹</button>
+      <span id="m-clip">—</span>
+      <span id="m-frame" class="mono"></span>
+      <button id="m-next" type="button" aria-label="下一段">›</button>
+    </div>
     <div id="viewport">
       <canvas id="view"></canvas>
     </div>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from copy import deepcopy as _deepcopy
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ import yaml
 from mjlab.managers import CommandTerm, CommandTermCfg
 from mjlab.utils.lab_api.math import quat_apply_inverse, wrap_to_pi, yaw_quat
 
-from instinct_mj.rl.acp.planner import CONTACT_BODIES, CONTACT_LINKS
+from instinct_mj.rl.acp.planner import CONTACT_BODIES, CONTACT_LINKS, TRACKED_LINKS
 
 if TYPE_CHECKING:
     from mjlab.entity import Entity
@@ -147,6 +148,10 @@ class AcpReferenceContactsCfg(AcpCommandCfg):
     require_full_clip: bool = True
     """The episode must last until the clip end: the longest clip has to fit in ``episode_length_s`` (False: the episodes are capped, e.g. the SuperMimic reset variant)."""
 
+    allow_label_collision_mismatch: bool = False
+    """Accept contact sidecars labelled with another ``simplified_collision`` than the env simulates (default False: raise). v1 sets it True with ``simplified_collision=True``: the
+    labels (on the authors' meshes) are kept as they are, not relabelled (user decision 2026-11-08); a note is printed once."""
+
     footprint_x: float = 0.8
     footprint_y: float = 0.5
     """Targets outside |x| <= footprint_x, |y| <= footprint_y (base-yaw frame) are invalid (zero vector)."""
@@ -199,6 +204,18 @@ class AcpReferenceContacts(AcpCommandBase):
             data = np.load(path)
             if [str(n) for n in data["body_names"]] != list(CONTACT_BODIES):
                 raise ValueError(f"'{path}' body_names {list(data['body_names'])} != CONTACT_BODIES {CONTACT_BODIES}.")
+            # the labels must be measured on the collision geometry the env simulates (v3_train6 / v3_final: the authors' meshes)
+            labelled_on = json.loads(str(data["params"])).get("simplified_collision") if "params" in data else None
+            simulated = getattr(self._env.cfg, "simplified_collision", None)
+            if labelled_on is not None and simulated is not None and bool(labelled_on) != bool(simulated) and self.cfg.allow_label_collision_mismatch:
+                if not getattr(AcpReferenceContacts, "_mismatch_noted", False):
+                    AcpReferenceContacts._mismatch_noted = True
+                    print(f"[contacts] sidecars labelled with simplified_collision={labelled_on}, env simulates simplified_collision={simulated}: accepted (allow_label_collision_mismatch)", flush=True)
+            elif labelled_on is not None and simulated is not None and bool(labelled_on) != bool(simulated):
+                raise ValueError(
+                    f"'{path}' was labelled with simplified_collision={labelled_on}, but the env simulates simplified_collision="
+                    f"{simulated}. Re-label the dataset (``label_contacts --overwrite``) or set the env flag to match."
+                )
             flag = torch.as_tensor(data["contact_flag"], dtype=torch.bool)
             pos = torch.as_tensor(data["contact_pos_w"], dtype=torch.float)
             fps[i] = float(data["framerate"])
@@ -271,7 +288,19 @@ class AcpReferenceContacts(AcpCommandBase):
     @property
     def ref_link_pos_w(self) -> torch.Tensor:
         """Reference world positions of the 9 contact links, (N, 9, 3)."""
-        return self.motion_reference.reference_frame.link_pos_w[:, 0]
+        return self.motion_reference.reference_frame.link_pos_w[:, 0, :NUM_CONTACT_BODIES]
+
+    @property
+    def track_body_ids(self) -> list[int]:
+        """Robot body ids of the SuperMimic tracked bodies (``TRACKED_LINKS``; the motion reference must carry them, SM-CH5TB)."""
+        if not hasattr(self, "_track_body_ids"):
+            assert self.motion_reference.cfg.link_of_interests is not None and list(self.motion_reference.cfg.link_of_interests) == list(TRACKED_LINKS), "the motion reference does not carry the tracked bodies"
+            self._track_body_ids = self.robot.find_bodies(TRACKED_LINKS, preserve_order=True)[0]
+        return self._track_body_ids
+
+    def ref_track(self, name: str) -> torch.Tensor:
+        """Reference ``link_pos_w`` / ``link_quat_w`` / ``link_lin_vel_w`` / ``link_ang_vel_w`` of the 14 tracked bodies, (N, 14, ...)."""
+        return getattr(self.motion_reference.reference_frame, name)[:, 0]
 
     def targets(self, estimated: bool) -> tuple[torch.Tensor, torch.Tensor]:
         """Contact targets in the pelvis yaw frame, (N, 9, 3) with invalid entries zeroed, and the valid mask (N, 9).

@@ -20,7 +20,7 @@ from instinct_mj.rl.acp.rays import ExactHeightScanner
 from instinct_mj.rl.acp.sim import ACPSimReader, build_mdp
 from instinct_mj.tasks.registry import load_env_cfg, load_env_cls
 
-TASK = "Instinct-ACP-Track-G1-v0"
+TASK = "Instinct-ACP-Track-G1-v1"
 
 
 def main() -> None:

@@ -22,7 +22,7 @@ from instinct_mj.rl import InstinctRlVecEnvWrapper  # noqa: E402
 from instinct_mj.rl.acp.runner import ACPRunner  # noqa: E402
 from instinct_mj.tasks.registry import load_env_cfg, load_env_cls, load_instinct_rl_cfg  # noqa: E402
 
-TASK = "Instinct-ACP-Track-G1-v0"
+TASK = "Instinct-ACP-Track-G1-v1"
 
 
 def timed(fn, *args, **kwargs):

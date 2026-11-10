@@ -17,7 +17,7 @@ class G1AcpStage3RunnerCfg(G1AcpTrackRunnerCfg, ACPStage3Cfg):
     run dir> --agent.load-checkpoint model_<it>.pt``: actor, normalizer, world model, critic Vm, failure head, planner) and counts its
     iterations from 0."""
 
-    experiment_name: str = "g1_acp_stage3"
+    experiment_name: str = "g1AcpStage3V1"
     max_iterations: int = 10000
     contact_source: str = "planner"
     train_planner: bool = True

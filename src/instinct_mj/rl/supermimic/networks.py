@@ -55,7 +55,8 @@ class RunningNorm(nn.Module):
         tot = self.count + n
         delta = m - self.mean
         self.mean += delta * n / tot
-        self.var = (self.var * self.count + v * n + delta**2 * self.count * n / tot) / tot
+        # Keep the variance buffer's address stable for CUDA graph replay.
+        self.var.copy_((self.var * self.count + v * n + delta**2 * self.count * n / tot) / tot)
         self.count = tot
 
     def forward(self, x):
@@ -215,9 +216,9 @@ class ValueHead(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, in_dim: int):
+    def __init__(self, in_dim: int, hidden=(256, 128)):
         super().__init__()
-        self.net = mlp(in_dim, [256, 128], 1)
+        self.net = mlp(in_dim, list(hidden), 1)
         self.norm = RunningNorm(in_dim)
 
     def forward(self, x):

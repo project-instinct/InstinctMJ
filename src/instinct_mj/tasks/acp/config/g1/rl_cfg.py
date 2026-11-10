@@ -31,7 +31,7 @@ class G1AcpTrackRunnerCfg(InstinctRlOnPolicyRunnerCfg, ACPRunnerCfg):
     max_iterations: int = 30000
     save_interval: int = 1000
     log_interval: int = 10
-    experiment_name: str = "g1_acp_track"
+    experiment_name: str = "g1AcpTrackV1"
     load_run: str | None = None
     policy_observation_group: str = "policy"
     critic_observation_group: str = "critic"
@@ -55,17 +55,18 @@ class G1AcpStage2RunnerCfg(G1AcpTrackRunnerCfg):
     labels of the successful episodes. Starts from a Stage 1 checkpoint (``--agent.load-run <abs run dir> --agent.load-checkpoint
     model_<it>.pt``: actor, normalizer, world model, critic, failure head) and counts its iterations from 0."""
 
-    experiment_name: str = "g1_acp_stage2"
+    experiment_name: str = "g1AcpStage2V1"
     max_iterations: int = 10000
     contact_source: str = "mixed"
     # ACP-unspecified (the paper gives the form of the schedules, not u_obs / u_rew / N_ann): the planner trains alone for the first 1000
-    # iterations (10 optimizer steps each) before the tracker sees any of its commands (eta_obs leaves 0); the reward keeps following the
+    # iterations (``planner_updates_per_iter`` = 1 optimizer step each) before the tracker sees any of its commands (eta_obs leaves 0); the reward keeps following the
     # reference until 3000, when the tracker has adapted to the planner commands for ~2000 iterations (u_rew > u_obs, Eq. 3); both ramp over
     # the same 4000 iterations, so eta_obs = 1 at iteration 5000 and eta_rew = 1 at 7000. Counted from the start of Stage 2.
     eta_obs_start_iter: int = 1000
     eta_rew_start_iter: int = 3000
     eta_ann_iters: int = 4000
     train_planner: bool = True
+    planner_updates_per_iter: int = 1  # one planner optimizer step per iteration (v1 decision; the ``ACPRunnerCfg`` default is 10, Table S5)
     restart_iteration: bool = True
     wm_only_iters: int = 0  # the world model and the failure head come from Stage 1
     fail_head_warmup_iters: int = 0

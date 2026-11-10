@@ -1,4 +1,4 @@
-"""Analytic MDP of the ACP tracking task (``Instinct-ACP-Track-G1-v0``) shared by the simulator labels and the world model.
+"""Analytic MDP of the ACP tracking task (``Instinct-ACP-Track-G1-v1``) shared by the simulator labels and the world model.
 
 State tuple ``S = (p, R, v, w, q, qd)`` as in ``instinct_mj.rl.supermimic.mdp`` (root = ``pelvis``, the 23 joints of the robot in simulator
 order). The *base* of the task is the PELVIS (IMU, scans, goal and contact frames, base rewards / terminations): pelvis quantities
@@ -21,6 +21,12 @@ from instinct_mj.rl.supermimic.terrain import HeightScanner
 
 from .kinematics import ACPKinematics
 from .motion import NUM_CONTACT, PELVIS, ACPMotion
+from .planner import CONTACT_LINKS, TRACKED_LINKS
+from .sdf_contact import VIOLATION_D, VIOLATION_LINKS, VIOLATION_REF_CLEARANCE, VIOLATION_TAU, get_violation_sdf
+
+FEET = [CONTACT_LINKS.index("left_ankle_roll_link"), CONTACT_LINKS.index("right_ankle_roll_link")]  # the foot_pos_too_far links
+VIOLATION_IDS = [TRACKED_LINKS.index(n) for n in VIOLATION_LINKS]  # ``kin.forward_all`` rows of the contact_violation bodies
+from instinct_mj.tasks.acp.mdp.observations import WIDE_SCAN_NUM_X, WIDE_SCAN_NUM_Y, wide_scan_offsets
 
 ACT_DIM = 23
 PROPRIO_DIM = 3 + 3 + ACT_DIM * 3  # base ang vel, projected gravity, joint pos, joint vel, last action (one step)
@@ -100,15 +106,15 @@ class ACPMDP:
         self.w = {n: rm.get_term_cfg(n).weight for n in rm.active_terms["rewards"]}
         self.p = {n: rm.get_term_cfg(n).params for n in rm.active_terms["rewards"]}
         tm = env.termination_manager
+        self.wide_scan = False  # the runner sets it from ``wm_scan``
+        self.wide_offsets = wide_scan_offsets(device)
         self.geo = None  # GeometricContact (set by the runner with ``geo_contact``)
+        self.violation_sdf = get_violation_sdf(env)  # exact torso-terrain distance of the contact_violation termination
         self.contact_acc_vel = self.p["contact_acc"].get("mode", "pos2") == "vel1"  # contact_acc from the link velocities: ``lp_hist`` carries the velocities of the states -1 and 0
         self.stopgrad: tuple[str, ...] = ()  # reward terms whose gradient is cut in ``reward`` (the runner sets it from ``bptt_stopgrad_terms``)
-        self.link_term = "link_pos_too_far" in tm.active_terms  # the variant task without the end-effector termination has no such term
-        self.xy_term = "base_xy_too_far" in tm.active_terms  # the SM-XY task variant ends the episode when the pelvis is too far from the reference horizontally
         self.soft_tz, self.soft_tt = 0.02, 0.04  # temperatures of the soft terminations (the runner sets them from soft_term_tau_dist / soft_term_tau_tilt)
-        self.contact_term = "contact_far_from_ref" in tm.active_terms  # the SM-C task variant: contact links far from the reference while the reference is in contact
-        self.tp = {n: tm.get_term_cfg(n).params for n in ("base_pos_too_far", "base_pg_too_far", *(("link_pos_too_far",) if self.link_term else ()), *(("base_xy_too_far",) if self.xy_term else ()),
-                                                          *(("contact_far_from_ref",) if self.contact_term else ()))}
+        self.tp = {n: tm.get_term_cfg(n).params for n in ("base_pos_too_far", "base_pg_too_far", "base_xy_too_far", "foot_pos_too_far")}  # the v1 failure terminations
+        self.num_track = motion.track_p.shape[1]  # the SuperMimic tracked bodies (the contact links first); the kinematics evaluate all of them
         # nominal joint data (xi carries the per-env encoder bias)
         self.default_q = robot.data.default_joint_pos[0].to(device)
         limits = robot.data.soft_joint_pos_limits[0]
@@ -139,6 +145,7 @@ class ACPMDP:
         self.proprio_noise = torch.cat([torch.full((n,), half(name)) for n, name in zip((3, 3, ACT_DIM, ACT_DIM, ACT_DIM), OBS_TERMS)]).to(device)
         self.scan_noise = half("tracker_height_scan")
         self.target_noise = float(terms["contact_targets"].params["noise"])
+        self.planner_z_noise = float(env.cfg.observations["planner"].terms["planner_height_scan"].params["z_noise_std"])
         self.goal_noise = half("goal_command")
         goal_cfg = env.command_manager.get_term("acp_goal").cfg
         self.goal_min_distance = goal_cfg.min_distance
@@ -180,9 +187,27 @@ class ACPMDP:
         return fk[0][:, PELVIS], fk[1][:, PELVIS], fk[2][:, PELVIS], fk[3][:, PELVIS]
 
     def scan(self, base_p: torch.Tensor, base_R: torch.Tensor) -> torch.Tensor:
-        """Planner scan (B, 187, y-major) of the env's critic scan: pelvis_z - ground - 0.5 on the yaw-aligned grid of the TRUE pelvis pose.
-        (The actor / planner scans of the env use the odometry-estimated pose (delay + drift); imagination uses the true imagined pose.)"""
+        """Scan (B, 187, y-major): pelvis_z - ground - 0.5 on the yaw-aligned grid of the given pelvis pose. The env's ``critic_height_scanner`` reads the
+        true pose; the actor / planner scans of the env read the odometry-estimated pose (delay + drift, ``estimated_pose``), which the runner passes
+        for the actor-side observations. The imagination's critic input uses the true imagined pose."""
         return self.scanner.height_scan(base_p, base_R) - SCAN_OFFSET
+
+    def critic_scan(self, base_p: torch.Tensor, base_R: torch.Tensor) -> torch.Tensor:
+        """Scan of the world model and the critic (true pelvis pose): ``wm_scan="wide"`` = the 31 x 15 forward grid (0 .. 1.5 m, +-0.35 m, 0.05 m, y-major; (B, 465)),
+        "planner" = ``scan`` (17 x 11). Same encoding (pelvis_z - ground - 0.5), the exact ray cast of the scanner."""
+        if not self.wide_scan:
+            return self.scan(base_p, base_R)
+        sc = self.scanner
+        if hasattr(sc, "exact_height"):
+            height = sc.height_scan(base_p, base_R, self.wide_offsets, (WIDE_SCAN_NUM_Y, WIDE_SCAN_NUM_X))
+        else:  # the 0.05 m height map
+            xy = base_p[:, None, :2] + mm(self.wide_offsets, yaw_mat(base_R)[..., :2, :2].transpose(-1, -2))
+            height = torch.clamp(base_p[:, 2:3] - sc.ground_height(xy), max=sc.max_distance)
+        return height - SCAN_OFFSET
+
+    @property
+    def critic_scan_dim(self) -> int:
+        return WIDE_SCAN_NUM_X * WIDE_SCAN_NUM_Y if self.wide_scan else SCAN_NY * SCAN_NX
 
     @staticmethod
     def tracker_scan(scan: torch.Tensor) -> torch.Tensor:
@@ -303,9 +328,9 @@ class ACPMDP:
     # ---------------- Stage 2: planner interface ----------------
     def planner_points(self, scan: torch.Tensor, noisy: bool = True) -> torch.Tensor:
         """Planner input points (B, 187, 3) exactly as the env's ``planner`` group gives them: (x, y, pelvis_z - ground_z - 0.5), y-major in
-        the base-yaw frame (``AttentionContactPlanner`` converts to physical base-relative z itself). ``noisy``: Gaussian z noise (sigma
-        0.03) as the env."""
-        h = scan + 0.03 * torch.randn_like(scan) if noisy else scan
+        the base-yaw frame (``AttentionContactPlanner`` converts to physical base-relative z itself). ``noisy``: Gaussian z noise with the
+        ``z_noise_std`` of the env's ``planner_height_scan`` term (0.03)."""
+        h = scan + self.planner_z_noise * torch.randn_like(scan) if noisy else scan
         xy = self.scanner.offsets.unsqueeze(0).expand(scan.shape[0], -1, -1)
         return torch.cat((xy, h.unsqueeze(-1)), -1)
 
@@ -318,10 +343,10 @@ class ACPMDP:
         one (in the first step of an episode the delay history holds the default pose target, i.e. the zero previous action). Position
         target = default + scale * action - encoder bias (the wrist joints hold their default).
 
-        ``torque_limits`` evaluates the PD torque of that control at the end state (``q1``, ``qd1``), as the env does. The env's
-        ``joint_torque`` reads ``qfrc_actuator`` before the final ``forward()``, i.e. the clipped torque at the START of the last physics
-        substep, which is reconstructed from the end state (semi-implicit Euler: q_pre = q1 - dt qd1; velocity: the mean acceleration of the
-        control step from ``qd0``, the velocity at its start)."""
+        Both terms are evaluated from the end state of the control step, ``q1`` / ``qd1``: ``torque_limits`` is the clipping excess of the PD torque
+        at the end state; ``joint_torque`` is the clipped torque applied during the LAST physics substep (the env reads ``qfrc_actuator``, which is
+        computed before the substep integrates, i.e. at the start of the substep), reconstructed from the end state (semi-implicit Euler:
+        q_pre = q1 - dt qd1; velocity: the mean acceleration of the control step from ``qd0``, the velocity at its start)."""
         use_prev = xi[..., XI_LAG] >= self.decimation  # (..., 1): the lag is shared by all joints
         a_eff = torch.where(use_prev, self.pad(a_prev), self.pad(a))
         target = self.default_q + self.act_scale_j * a_eff - xi[..., XI_BIAS] * self.act_mask
@@ -333,24 +358,27 @@ class ACPMDP:
         return (applied[..., self.act_ids] ** 2).sum(-1), limit_excess
 
     def weights(self, eta_rew: torch.Tensor) -> dict[str, torch.Tensor | float]:
-        """Reward weights of the env; with the Stage 2 reward schedule the three reference-contact terms are multiplied by
-        ``1 - eta_rew`` and the planned-contact term is ``1.5 * eta_rew`` (paper Table 3)."""
+        """Reward weights of the env; with the Stage 2 reward schedule the three reference-contact terms of Table 3 are multiplied by
+        ``1 - eta_rew`` and the planned-contact term is ``1.5 * eta_rew``. ``track_body_pos_anchor`` (a body POSITION term, like the
+        reference-contact positions, which the planner replaces) fades with ``1 - eta_rew`` as well; ``track_body_ori`` / ``track_body_lin_vel`` /
+        ``track_body_ang_vel`` keep their weights (the paper keeps all other terms)."""
         w = dict(self.w)
-        for n in ("track_contact_label", "track_contact_pos_base", "track_contact_pos_global"):
+        for n in ("track_contact_label", "track_contact_pos_base", "track_contact_pos_global", "track_body_pos_anchor"):
             w[n] = w[n] * (1 - eta_rew)
         w["track_planned_contact"] = 1.5 * eta_rew
         return w
 
-    def reward(self, S, qd0, f, phase, origin, a, a_prev, a_prev2, xi, contact, lp_hist, ep0, H: int, planned=None, eta_rew=None, terms: bool = False, use_geo_contact: bool = False):
+    def reward(self, S, qd0, f, phase, origin, a, a_prev, a_prev2, xi, contact, lp_hist, ep0, H: int, planned=None, eta_rew=None, terms: bool = False, use_geo_contact: bool = False, fk=None):
         """Per-step reward (weights and ``dt`` applied) of the task for the transitions ending in ``S``. The batch is (H * B) laid out
         step-major (``stack(xs).flatten(0, 1)``). ``contact``: c_meas (B*H, 9) (probabilities in imagination), ``lp_hist`` (2, B, 9, 3): world
         positions (velocities with ``contact_acc`` mode vel1) of the contact links at the two states before the start (for ``contact_acc``), ``ep0`` (B,): episode step of the start
         state (``contact_acc`` needs three positions of the episode), ``qd0``: joint velocities at the start of every transition (same layout as ``S``), ``planned``: (world targets (H*B, 9, 3), mask) of the planner (``targets_to_world``; None: the
-        reference targets, as the env evaluates the term). ``eta_rew`` None = the env's weights."""
+        reference targets, as the env evaluates the term). ``eta_rew`` None = the env's weights. ``fk``: ``kin.forward_all(*S)`` when the caller has it already."""
         m, P = self.motion, self.p
         w = self.w if eta_rew is None else self.weights(eta_rew)
         p, R, v, wv, q, qd = S
-        bp, bR, bv, bw = self.kin.forward(*S)
+        full = self.kin.forward_all(*S) if fk is None else fk  # the SuperMimic tracked bodies: the contact links are the first NUM_CONTACT
+        bp, bR, bv, bw = tuple(x[:, :NUM_CONTACT] for x in full)
         pel_p, pel_R, pel_v, pel_w = self.base_of((bp, bR, bv, bw))
         if use_geo_contact:  # imagination: the contact probability of the nine links computed from the geometry (instead of the world model's learned head)
             contact = self.geo.contact(bp, bR)
@@ -373,6 +401,14 @@ class ACPMDP:
         c = P["track_contact_pos_global"]
         moving = (rv.norm(dim=-1) > c["moving_speed_threshold"]).float()
         t["track_contact_pos_global"] = torch.exp(-moving * ((bp - ref_links) ** 2).sum((-1, -2)) / sq(c["sigma"]))
+        # the SuperMimic body terms (supermimic_vibed mdp.py:108-131) over the tracked bodies; anchor = (robot root xy, reference root z), dR = yaw(R rR^T)
+        tp, tR, tv, tw = full
+        trk_p, trk_R, trk_v, trk_w = m.track_p[f], m.track_R[f], m.track_v[f], m.track_w[f]
+        d_R, ref_bp = self.anchored_reference(pel_p, pel_R, rp, rR, f, origin)
+        t["track_body_pos_anchor"] = torch.exp(-((ref_bp - tp) ** 2).sum(-1).mean(-1) / sq(P["track_body_pos_anchor"]["sigma"]))
+        t["track_body_ori"] = torch.exp(-rot_angle_sq(mm(d_R.unsqueeze(1), trk_R), tR).mean(-1) / sq(P["track_body_ori"]["sigma"]))
+        t["track_body_lin_vel"] = torch.exp(-((trk_v - tv) ** 2).sum(-1).mean(-1) / sq(P["track_body_lin_vel"]["sigma"]))
+        t["track_body_ang_vel"] = torch.exp(-((trk_w - tw) ** 2).sum(-1).mean(-1) / sq(P["track_body_ang_vel"]["sigma"]))
         if planned is None:  # the reference targets in the (true) pelvis frame, as the env evaluates the term
             tgt_b, mask = self.targets(pel_p, pel_R, f, phase, origin)
             err = (mask * ((exec_b - tgt_b) ** 2).sum(-1)).sum(-1)
@@ -403,49 +439,60 @@ class ACPMDP:
         r = sum((v_.detach() if k in self.stopgrad else v_) for k, v_ in t.items()) * self.dt  # the value of every term, the gradient of the others only
         return (r, t) if terms else r
 
-    def pelvis_xy_error(self, bp, f, origin) -> torch.Tensor:
-        """Horizontal distance of the pelvis from the reference pelvis (the ``base_xy_too_far`` termination)."""
-        return (bp[:, PELVIS, :2] - (self.motion.link_p[f][:, PELVIS, :2] + origin[..., :2])).norm(dim=-1)
+    def anchored_reference(self, pel_p, pel_R, rp, rR, f, origin) -> tuple[torch.Tensor, torch.Tensor]:
+        """SuperMimic's anchored reference: ``dR = yaw(R R*^T)`` (B, 3, 3) and the reference positions of the tracked bodies (B, K, 3) re-anchored to
+        (robot root xy, reference root z) and rotated by ``dR`` (``rp`` / ``rR``: the reference pelvis in the world)."""
+        d_R = yaw_mat(mm(pel_R, rR.transpose(-1, -2)))
+        anchor = torch.cat((pel_p[..., :2], rp[..., 2:3]), -1).unsqueeze(1)
+        return d_R, anchor + mv(d_R.unsqueeze(1), self.motion.track_p[f] + origin.unsqueeze(1) - rp.unsqueeze(1))
+
+    def pelvis_height_error(self, bp, f, origin) -> torch.Tensor:
+        """Distance of the pelvis from the reference pelvis for ``base_pos_too_far`` (its ``height_only`` flag: the vertical component only, else 3-D)."""
+        diff = bp[:, PELVIS] - (self.motion.link_p[f][:, PELVIS] + origin)
+        return diff[..., 2].abs() if self.tp["base_pos_too_far"].get("height_only", True) else diff.norm(dim=-1)
 
     def projected_gravity_error(self, bR, f) -> torch.Tensor:
         """Distance of the pelvis projected gravity from the reference's, as the env's ``base_pg_too_far`` (``z_only``: only the z component, the tilt test of the SuperMimic reference)."""
         diff = -bR[:, PELVIS, 2, :] + self.motion.link_R[f][:, PELVIS, 2, :]
         return diff[..., 2].abs() if self.tp["base_pg_too_far"]["z_only"] else diff.norm(dim=-1)
 
-    def contact_far(self, bp, bR, f, phase, origin) -> tuple[torch.Tensor, torch.Tensor]:
-        """(B, 9) distance of the contact links from their reference positions and the mask of the links the ``contact_far_from_ref`` termination looks at (reference in contact, past the grace frames)."""
-        m = self.motion
-        active = m.flag(f, phase) & (m.age(f, phase) > self.tp["contact_far_from_ref"]["grace_frames"]) & (m.link_R[f][:, PELVIS, 2, 2] > self.tp["contact_far_from_ref"]["upright_cos"]).unsqueeze(-1)  # the reference pelvis is upright (pg_z = -R_zz)
-        ref_links = m.link_p[f] + origin.unsqueeze(1)
-        if self.tp["contact_far_from_ref"]["frame"] == "base":  # actual and reference positions in their own pelvis-yaw frames
-            exec_b = mv(yaw_mat(bR[:, PELVIS]).transpose(-1, -2).unsqueeze(1), bp - bp[:, PELVIS].unsqueeze(1))
-            ref_b = mv(yaw_mat(m.link_R[f][:, PELVIS]).transpose(-1, -2).unsqueeze(1), ref_links - ref_links[:, PELVIS].unsqueeze(1))
-            return (exec_b - ref_b).norm(dim=-1), active
-        return (bp - ref_links).norm(dim=-1), active
-
     def termination(self, S, f, origin, phase) -> dict[str, torch.Tensor]:
-        """Hard versions of base_pos_too_far / base_pg_too_far / link_pos_too_far on the pelvis / contact links (margin to the threshold)."""
-        m = self.motion
+        """Hard versions of the failure terminations (margin to the threshold)."""
         bp, bR = self.kin.forward(*S)[:2]
-        e_z = (bp[:, PELVIS, 2] - (m.link_p[f][:, PELVIS, 2] + origin[..., 2])).abs()
+        e_z = self.pelvis_height_error(bp, f, origin)
         e_pg = self.projected_gravity_error(bR, f)
-        e_link = (bp[..., 2] - (m.link_p[f][..., 2] + origin[..., 2:3])).abs()
-        out = {
+        e_xy, e_foot = self.tracking_errors(bp, f, origin)
+        d_v = self.violation_distance(S)
+        return {
+            "contact_violation": torch.where(self.violation_active(f, origin), VIOLATION_D - d_v, torch.full_like(d_v, -1.0)),
             "base_pos_too_far": e_z - self.tp["base_pos_too_far"]["distance_threshold"],
             "base_pg_too_far": e_pg - self.tp["base_pg_too_far"]["projected_gravity_threshold"],
+            "base_xy_too_far": e_xy - self.tp["base_xy_too_far"]["distance_threshold"],
+            "foot_pos_too_far": e_foot - self.tp["foot_pos_too_far"]["distance_threshold"],
         }
-        if self.xy_term:
-            out["base_xy_too_far"] = self.pelvis_xy_error(bp, f, origin) - self.tp["base_xy_too_far"]["distance_threshold"]
-        if self.contact_term:
-            dist, active = self.contact_far(bp, bR, f, phase, origin)
-            out["contact_far_from_ref"] = (dist * active).max(-1).values - self.tp["contact_far_from_ref"]["distance_threshold"]
-        if self.link_term:
-            out["link_pos_too_far"] = e_link.max(-1).values - self.tp["link_pos_too_far"]["distance_threshold"]
-        return out
 
-    def link_deviation(self, S, f, origin) -> torch.Tensor:
-        """Largest height deviation (B,) of the nine contact links from the reference (the quantity of the ``link_pos_too_far`` termination)."""
-        bp = self.kin.forward(*S)[0]
+    def violation_distance(self, S, fk=None) -> torch.Tensor:
+        """Smallest terrain distance (B,) of the ``contact_violation`` bodies (the torso) from the exact SDF of their collision primitives (``fk``: ``kin.forward_all``)."""
+        full = self.kin.forward_all(*S) if fk is None else fk
+        return self.violation_sdf.distance(full[0][:, VIOLATION_IDS], full[1][:, VIOLATION_IDS]).min(-1).values
+
+    def violation_active(self, f, origin) -> torch.Tensor:
+        """``contact_violation`` applies where the reference violation bodies are further than ``VIOLATION_REF_CLEARANCE`` from the terrain (B,) (as the env term)."""
+        m = self.motion
+        d = self.violation_sdf.distance(m.track_p[f][:, VIOLATION_IDS] + origin.unsqueeze(1), m.track_R[f][:, VIOLATION_IDS]).min(-1).values
+        return d > VIOLATION_REF_CLEARANCE
+
+    def tracking_errors(self, bp, f, origin) -> tuple[torch.Tensor, torch.Tensor]:
+        """``base_xy_too_far`` / ``foot_pos_too_far`` errors: horizontal pelvis distance to the reference pelvis, largest 3-D foot distance to the reference foot."""
+        ref = self.motion.link_p[f] + origin.unsqueeze(1)
+        e_xy = (bp[:, PELVIS, :2] - ref[:, PELVIS, :2]).norm(dim=-1)
+        e_foot = (bp[:, FEET] - ref[:, FEET]).norm(dim=-1).max(-1).values
+        return e_xy, e_foot
+
+    def link_deviation(self, S, f, origin, fk=None) -> torch.Tensor:
+        """Largest height deviation (B,) of the nine contact links from the reference (the quantity of the ``link_pos_too_far`` termination).
+        ``fk``: ``kin.forward_all(*S)`` (or ``kin.forward``) when the caller has it already."""
+        bp = (self.kin.forward(*S) if fk is None else fk)[0][:, :NUM_CONTACT]
         return (bp[..., 2] - (self.motion.link_p[f][..., 2] + origin[..., 2:3])).abs().max(-1).values
 
     def reference_state(self, f, origin):
@@ -456,33 +503,32 @@ class ACPMDP:
     def hard_termination(self, S, f, origin, phase) -> torch.Tensor:
         return torch.stack([v > 0 for v in self.termination(S, f, origin, phase).values()], -1).any(-1)
 
-    def soft_termination(self, S, f, origin, phase, tz: float | None = None, tt: float | None = None) -> torch.Tensor:
-        """Differentiable termination probability for imagined rollouts (the per-step hazard of every term is sigmoid((error - threshold) / tau), ``soft_tz`` for the distances, ``soft_tt`` for the tilt)."""
+    def soft_termination(self, S, f, origin, phase, tz: float | None = None, tt: float | None = None, fk=None) -> torch.Tensor:
+        """Differentiable termination probability for imagined rollouts (the per-step hazard of every term is sigmoid((error - threshold) / tau), ``soft_tz`` for the distances, ``soft_tt`` for the tilt).
+        ``fk``: ``kin.forward_all(*S)`` (or ``kin.forward``) when the caller has it already."""
         tz, tt = self.soft_tz if tz is None else tz, self.soft_tt if tt is None else tt
-        m = self.motion
-        bp, bR = self.kin.forward(*S)[:2]
-        e_z = (bp[:, PELVIS, 2] - (m.link_p[f][:, PELVIS, 2] + origin[..., 2])).abs()
+        fk = self.kin.forward_all(*S) if fk is None else fk
+        bp, bR = fk[:2]
+        e_z = self.pelvis_height_error(bp, f, origin)
         e_pg = self.projected_gravity_error(bR, f)
-        e_link = (bp[..., 2] - (m.link_p[f][..., 2] + origin[..., 2:3])).abs()
         alive = 1 - torch.sigmoid((e_z - self.tp["base_pos_too_far"]["distance_threshold"]) / tz)
         alive = alive * (1 - torch.sigmoid((e_pg - self.tp["base_pg_too_far"]["projected_gravity_threshold"]) / tt))
-        if self.xy_term:
-            alive = alive * (1 - torch.sigmoid((self.pelvis_xy_error(bp, f, origin) - self.tp["base_xy_too_far"]["distance_threshold"]) / tz))
-        if self.contact_term:
-            dist, active = self.contact_far(bp, bR, f, phase, origin)
-            alive = alive * (1 - active * torch.sigmoid((dist - self.tp["contact_far_from_ref"]["distance_threshold"]) / tz)).prod(-1)
-        if self.link_term:
-            alive = alive * (1 - torch.sigmoid((e_link - self.tp["link_pos_too_far"]["distance_threshold"]) / tz)).prod(-1)
+        e_xy, e_foot = self.tracking_errors(bp, f, origin)
+        alive = alive * (1 - torch.sigmoid((e_xy - self.tp["base_xy_too_far"]["distance_threshold"]) / tz))
+        alive = alive * (1 - torch.sigmoid((e_foot - self.tp["foot_pos_too_far"]["distance_threshold"]) / tz))
+        alive = alive * (1 - torch.sigmoid((VIOLATION_D - self.violation_distance(S, fk)) / VIOLATION_TAU) * self.violation_active(f, origin).float())
         return 1 - alive
 
     # ---------------- critic ----------------
-    def critic_features(self, S, f, phase, origin, xi_n, goal_pos, goal_yaw) -> torch.Tensor:
-        """Privileged critic input: invariant state, pelvis velocities, robot-vs-reference errors (joints, 9 contact links, pelvis), the
+    def critic_features(self, S, f, phase, origin, xi_n, goal_pos, goal_yaw, fk=None) -> torch.Tensor:
+        """Privileged critic input: invariant state, pelvis velocities, robot-vs-reference errors (joints, 9 contact links, the anchored position
+        error of the 14 tracked bodies in the robot yaw frame (SuperMimic's critic input, upstream mdp.py:174), pelvis), the
         reference kinematics / contact flags / next-onset targets (noise-free), goal, 17 x 11 scan (true pose) and the
-        sim context."""
+        sim context. ``fk``: ``kin.forward_all(*S)`` when the caller has it already."""
         m = self.motion
         p, R, v, w, q, qd = S
-        bp, bR, bv, bw = self.kin.forward(*S)
+        full = self.kin.forward_all(*S) if fk is None else fk
+        bp, bR, bv, bw = tuple(x[:, :NUM_CONTACT] for x in full)
         pel_p, pel_R, pel_v, pel_w = self.base_of((bp, bR, bv, bw))
         Ht = yaw_mat(pel_R).transpose(-1, -2)
         rp, rR, rv, rw = (m.link_p[f][:, PELVIS] + origin, m.link_R[f][:, PELVIS], m.link_v[f][:, PELVIS], m.link_w[f][:, PELVIS])
@@ -490,13 +536,14 @@ class ACPMDP:
         ref_b = mv(Ht.unsqueeze(1), ref_links - pel_p.unsqueeze(1))
         act_b = mv(Ht.unsqueeze(1), bp - pel_p.unsqueeze(1))
         e_root = mv(Ht, rp - pel_p)
+        e_track = mv(Ht.unsqueeze(1), self.anchored_reference(pel_p, pel_R, rp, rR, f, origin)[1] - full[0])  # SuperMimic critic input: anchored reference - body position, robot yaw frame
         rel = mat_to_6d(mm(pel_R.transpose(-1, -2), rR))
         ref_kin = torch.cat((mv(rR.transpose(-1, -2), rv), mv(rR.transpose(-1, -2), rw), m.q[f][..., self.act_ids], m.qd[f][..., self.act_ids]), -1)
         tgt, valid = self.targets(pel_p, pel_R, f, phase, origin)
         vel_b = torch.cat((mv(pel_R.transpose(-1, -2), pel_v), mv(pel_R.transpose(-1, -2), pel_w)), -1)
-        return torch.cat((invariant_features(S), vel_b, m.q[f] - q, (ref_b - act_b).flatten(1), ref_b.flatten(1), e_root, rel, ref_kin,
+        return torch.cat((invariant_features(S), vel_b, m.q[f] - q, (ref_b - act_b).flatten(1), ref_b.flatten(1), e_track.flatten(1), e_root, rel, ref_kin,
                           m.flag(f, phase).float(), tgt.flatten(1), valid.float(), self.goal(pel_p, pel_R, goal_pos, goal_yaw),
-                          self.scan(pel_p, pel_R), xi_n), -1)  # fmt: skip
+                          self.critic_scan(pel_p, pel_R), xi_n), -1)  # fmt: skip
 
     def critic_dim(self) -> int:
-        return INV_DIM + 6 + NUM_J + 27 + 27 + 3 + 6 + 52 + NUM_CONTACT + 27 + NUM_CONTACT + 3 + SCAN_NY * SCAN_NX + self.xi_dim
+        return INV_DIM + 6 + NUM_J + 27 + 27 + 3 * self.num_track + 3 + 6 + 52 + NUM_CONTACT + 27 + NUM_CONTACT + 3 + self.critic_scan_dim + self.xi_dim

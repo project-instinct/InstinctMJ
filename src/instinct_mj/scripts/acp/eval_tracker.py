@@ -41,7 +41,7 @@ from instinct_mj.tasks.registry import load_env_cfg, load_env_cls, load_instinct
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("checkpoint")
-    parser.add_argument("--task", default="sm", help="task id, or sm / xy / bm / c / ch5 for Instinct-ACP-Track-SM[-XY|-BM|-C|-CH5]-G1-v0 (the terminations of the run the checkpoint comes from)")
+    parser.add_argument("--task", default="Instinct-ACP-Track-G1-v1", help="task id (the terminations of the run the checkpoint comes from)")
     parser.add_argument("--mode", default="robust", choices=("robust", "paper"))
     parser.add_argument("--num-envs", type=int, default=128)
     parser.add_argument("--episodes", type=int, default=8, help="cohort size: envs (episodes) per clip")
@@ -52,11 +52,9 @@ def main() -> None:
     parser.add_argument("--z-end", type=float, default=0.1, help="get_up clips: success also needs the pelvis height error at the episode end below this [m] (ACP: vertical error < 0.1 m)")
     parser.add_argument("--get-up-xy", action="store_true", help="paper mode: the get_up clips also need the horizontal error below --xy-end (ACP: instead the vertical error below --z-end only)")
     parser.add_argument("--noise", type=float, default=None, help="std of the Gaussian action noise (default: 0.1 in robust mode, 0 in paper mode)")
-    parser.add_argument("--paper-keep-terminations", action="store_true", help="paper mode: keep the contact / position terminations of the training task (the earlier paper-mode behaviour)")
     parser.add_argument("--clip-regex", default=".*", help="only the clips whose name matches")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
-    args.task = {"sm": "Instinct-ACP-Track-SM-G1-v0", "xy": "Instinct-ACP-Track-SM-XY-G1-v0", "bm": "Instinct-ACP-Track-SM-BM-G1-v0", "c": "Instinct-ACP-Track-SM-C-G1-v0", "ch5": "Instinct-ACP-Track-SM-CH5-G1-v0"}.get(args.task, args.task)
     paper = args.mode == "paper"
     device = "cuda:0"
     cfg = load_env_cfg(args.task)
@@ -67,21 +65,22 @@ def main() -> None:
         for actuator in cfg.scene.entities["robot"].articulation.actuators:
             actuator.delay_max_lag = 0
         cfg.events["reset_robot"].params["randomize_velocity_range"] = {}
-        for name in () if args.paper_keep_terminations else ("contact_far_from_ref", "base_xy_too_far", "link_pos_too_far"):
-            cfg.terminations.pop(name, None)
     env = load_env_cls(args.task)(cfg=cfg, device=device)
     vec = InstinctRlVecEnvWrapper(env, policy_group="policy", critic_group="critic")
     agent = load_instinct_rl_cfg(args.task).to_dict()
+    _saved = os.path.join(os.path.dirname(os.path.abspath(args.checkpoint)), "params", "agent.yaml")
+    if os.path.isfile(_saved):  # the runner options of the run the checkpoint comes from (world-model inputs, critic size, termination source)
+        import yaml
+        agent.update({k: v for k, v in yaml.safe_load(open(_saved)).items() if not isinstance(v, dict) and k in agent})
     agent.update(compile=False, compile_policy=False, buffer_steps=64, warmup_steps=32)
     runner = load_runner_cls(args.task)(vec, agent, None, device)
     runner.load(args.checkpoint)
     runner.setup_training()
     policy = runner.get_inference_policy(device=device)
     torch.set_grad_enabled(False)
-    csi = env.curriculum_manager.get_term_cfg("curriculum_state_init").func
-    csi.mode = "start"  # every episode starts at phase 0 of its clip
-    csi.bins = csi.return_sampling = False
-    mb, mdp, reader, motion = csi.motion_buffer, runner.mdp, runner.reader, runner.motion
+    start = env.curriculum_manager.get_term_cfg("episode_start").func
+    start.mode = "start"  # every episode starts at phase 0 of its clip
+    mb, mdp, reader, motion = start.motion_buffer, runner.mdp, runner.reader, runner.motion
     names = runner.motion_names
     families = [clip_family(e.get("group", "")) for e in mb.yaml_data["motion_files"]]
     num_clips, N, E = len(names), args.num_envs, args.episodes

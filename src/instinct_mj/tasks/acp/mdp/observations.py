@@ -20,6 +20,19 @@ if TYPE_CHECKING:
 # Planner scan: 17 (x) x 11 (y) points, 0.1 m spacing, x in [-0.8, 0.8], y in [-0.5, 0.5], y-major (y outer, x inner).
 SCAN_NUM_X = 17
 SCAN_NUM_Y = 11
+# World-model / critic scan (privileged, never the actor's; ``wm_scan="wide"``): 31 (x, 0 .. 1.5 m forward) x 15 (y, +-0.35 m) points at 0.05 m, y-major, in the yaw frame of the true
+# pelvis (the open-source reproduction's CRITIC_SCAN, ((0, 1.5, 31), (-0.35, 0.35, 15))).
+WIDE_SCAN_X = (0.0, 1.5, 31)
+WIDE_SCAN_Y = (-0.35, 0.35, 15)
+WIDE_SCAN_NUM_X, WIDE_SCAN_NUM_Y = WIDE_SCAN_X[2], WIDE_SCAN_Y[2]
+
+
+def wide_scan_offsets(device="cpu") -> torch.Tensor:
+    """(15 * 31, 2) offsets (x, y) of the wide scan in the pelvis yaw frame, y-major (y outer, x inner)."""
+    gx, gy = torch.meshgrid(torch.linspace(*WIDE_SCAN_X, device=device), torch.linspace(*WIDE_SCAN_Y, device=device), indexing="xy")
+    return torch.stack((gx.flatten(), gy.flatten()), -1)
+
+
 # Tracker scan: the central 9 (x, x in [-0.4, 0.4]) x 7 (y, y in [-0.3, 0.3]) block of the planner scan.
 TRACKER_X_SLICE = slice(4, 13)
 TRACKER_Y_SLICE = slice(2, 9)

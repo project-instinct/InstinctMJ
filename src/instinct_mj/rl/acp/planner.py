@@ -22,6 +22,10 @@ CONTACT_LINKS = (
     "left_knee_link", "right_knee_link", "pelvis", "left_ankle_roll_link", "right_ankle_roll_link",
     "left_elbow_link", "right_elbow_link", "left_wrist_yaw_link", "right_wrist_yaw_link",
 )  # fmt: skip
+# SuperMimic's tracked bodies of the G1 (BeyondMimic set, 14 bodies) = the 9 contact links + these 5, appended after the contact links (indices 9 ..) so that the contact-link order is unchanged. Only the
+# SM-CH5TB task's motion reference carries them (``link_of_interests``): the reward terms ``track_body_*`` average over all of them.
+TRACK_EXTRA_LINKS = ("torso_link", "left_hip_roll_link", "right_hip_roll_link", "left_shoulder_roll_link", "right_shoulder_roll_link")
+TRACKED_LINKS = CONTACT_LINKS + TRACK_EXTRA_LINKS
 NUM_BODIES = len(CONTACT_BODIES)
 PROPRIO_DIM = 5 * (3 + 3 + 23 + 23 + 23)  # five-step history
 GOAL_DIM = 3

@@ -45,6 +45,20 @@ class ACPRunnerCfg:
     """Fraction of envs never used for world-model / head training, only for held-out calibration diagnostics (default 0.1)."""
     wm_only_iters: int = 500
     """World-model-only iterations at the start, no policy update (default 500)."""
+    wm_physics_inputs: str = ""
+    """Comma-separated extra inputs of the world model, appended after the ``(scan, previous action)`` context (default "":
+    the plain world model, unchanged). ``torque``: the PD torque the actuators deliver at the current state (23, the env's PD law with the
+    action delay, effort limits and encoder bias); ``clearance`` / ``clearance_vel``: height above the terrain and world vertical velocity
+    of the nine contact links (9 each). All are known at training time and are recomputed from the imagined state, so this is an
+    input-representation change only: same network, same losses, same training target. See ``research/ds_proposal.md``."""
+    wm_ref_contacts: bool = False
+    """WM-only contact command input (36: the 27 target values and their validity): the command the tracker's observation actually carries at that step (Stage 1: the reference targets with the observation noise; Stage 2: the per-env reference / planner mix; Stage 3: the planner's), stored in the buffer at collection and rebuilt from the observation in the imagination. Default off."""
+    wm_contact_feedback: bool = False
+    """WM-only contact probability feedback: measured at the start, then autoregressive with full gradients. Default off."""
+    profile_phases: bool = False
+    """Log synchronized collection / WM(+termination head) / policy+critic wall times. Default off."""
+    lazy_exact_heightmap: bool = False
+    """With exact_scan, build the auxiliary bilinear map only if ground_height is used. Exact rays stay unchanged. Default off."""
 
     # ---- failure head ----
     # ---- failure head ----
@@ -72,17 +86,29 @@ class ACPRunnerCfg:
     clip_end_bootstrap: bool = False
     """With ``imagine_past_clip_end``: the last imagined step inside the clip is a time-out, not a termination (SuperMimic: time-outs bootstrap): its return
     bootstraps with the critic value of the state at the clip end instead of zero (default False: zero continuation, the old runs). Track only."""
-    reset_sampling: str = "csi"
-    """Start of an episode: "csi" (default: the clip by ``clip_sampling``, the start phase by the CSI curriculum) or "bins" (SuperMimic App. D.1 as it is: 1 s bins of
-    all clips, running return per bin attributed to the start bin of the episode, p_b = 0.5 uniform + 0.4 softmax(-25 G_b / G_max) + 0.1 past softmax weights, start
-    frame uniform in the bin; the CSI phase updates are off; incompatible with ``clip_sampling="return"`` and ``csi_strict_link_eps``). The reset noise of the env
-    (Table S2) is kept, the upstream reset noise is not added. Track only."""
+    reset_sampling: str = "bins"
+    """Start of an episode: "csi" = the ACP paper's Curriculum State Initialization (Stage 1; Table S4: per-clip initialization phase, initial 0.9, -0.05 after an episode reaches phase
+    0.99 and +0.05 otherwise, clipped to [0, 0.99]; ``csi_*`` below; the phases are saved in the sidecar by clip name and logged as ``csi/*``), or "bins" (default) = SuperMimic App. D.1 as it is: 1 s bins of all clips, running return per bin attributed to the start bin of the episode, p_b = 0.5 uniform +
+    0.4 softmax(-25 G_b / G_max) + 0.1 past softmax weights, start frame uniform in the bin. The reset noise of the env (Table S2) is kept, the upstream reset noise is not added.
+    Stage 3 and evaluation envs (episode start mode "start": phase 0) have no bins. Track only."""
+    csi_init_phase: float = 0.9
+    """CSI (reset_sampling "csi"): initial phase of every clip (paper Table S4: 0.9)."""
+    csi_step: float = 0.05
+    """CSI: phase adjustment per update (paper: 0.05)."""
+    csi_success_phase: float = 0.99
+    """CSI: an episode that reaches this phase of its clip is a success (paper: completion threshold 0.99) if its pelvis ends within 0.5 m of the reference pelvis horizontally
+    (``curriculums.CSI_SUCCESS_XY``, ACP-unspecified; the same holds for the clip end and the cap)."""
+    csi_max_phase: float = 0.99
+    """CSI: upper clip of the initialization phase (paper: allowed range [0, 0.99])."""
+    csi_success_on_timeout: bool = True
+    """CSI (ACP-unspecified): an episode that ends by the episode cap (10 s in v1) without a failure termination counts as a success, as one that reached the success phase. Without it the
+    clips longer than the cap could never be started earlier than cap seconds before their end (phase 0.99 is out of reach inside the cap)."""
     bins_v2: bool = False
-    """``reset_sampling="bins"``: bins over the valid START frames of a clip (frames 0 .. T-2), a tail bin of less than 25 frames merged into the previous one (no zero-width and no very
+    """Reset bins over the valid START frames of a clip (frames 0 .. T-2), a tail bin of less than 25 frames merged into the previous one (no zero-width and no very
     short bins); the return of an episode that ends at the clip end gets no mean-reward bootstrap (the finite task end), only the episodes that end by the episode cap keep the upstream
     bootstrap, and episodes shorter than 10 steps do not update G_b. The stored G_b / bin weights of a sidecar without v2 bins are not restored (default False: the old bins)."""
     bins_difficulty_k: float = 0.0
-    """``reset_sampling="bins"``: the uniform half of the bin distribution is weighted by the clip difficulty d_c = 1 + k f_c (f_c: running failure rate of the clip, EMA 0.02 per update, initialized
+    """Reset bins: the uniform half of the bin distribution is weighted by the clip difficulty d_c = 1 + k f_c (f_c: running failure rate of the clip, EMA 0.02 per update, initialized
     0.5, of its episodes that ended by a non-time-out termination), normalized to 0.5 again; the softmax and history parts are unchanged (default 0: the plain uniform half)."""
     clip_end_exact_last: bool = False
     """The last valid imagined transition of a start is found from the absolute frames (the transition into the clip end), so a clip end exactly at imagined step H is the last step too (default False: that step never
@@ -101,17 +127,14 @@ class ACPRunnerCfg:
     """True (default, the old runs): the imagined joint positions are projected onto the hard joint range and the velocities pushing further out are zeroed (``clamp_joints``), which the
     world-model training rollout does not do and which removes the joint-limit reward and its gradient in the imagination. False: the same transition as the world-model rollout,
     the joint-limit reward sees the unclamped q; only a wide NaN guard (hard range +- 0.5 rad) remains."""
+    term_source: str = "analytic"
+    """Termination of the imagined rollouts: "analytic" (default, the old runs: the env's thresholds as sigmoids, ``soft_term_tau_*``), "learned" (SuperMimic paper, Eq. 1-2: d = sigmoid of a termination head
+    ``dω(ŝ_t, g_t)`` trained with BCE on the autoregressive k-step windows against the REAL termination labels; the analytic term is not used) or "union" (1 - (1 - d_analytic)(1 - d_learned)). The head
+    (``term_head.py``) is built and trained only for "learned" / "union". Goal-reaching starts of Stage 3 keep their analytic fall."""
     clip_end_v2: bool = False
     """The clip end of the imagination as in the real env: the transition into the frame T (one after the last valid frame) is the last real one (``dataset_exhausted`` fires there, the reference
     stays on its last frame) and a start at the last valid frame is allowed (False: the imagined episode ends one transition early); the critic normalizer only sees the states reached
     through valid transitions (default False)."""
-    clip_sampling: str = "uniform"
-    """Clip choice at the reset of an env: "uniform" (the motion weights of the dataset, default) or "return" (SuperMimic App. D.1: a running estimate G_c of the
-    discounted return of the episodes of clip c, p_c = 0.5 u_c + 0.4 softmax(-25 G_c / G_max) + 0.1 h_c with u_c proportional to the clip duration and h_c the
-    EMA (0.999) of the past softmax weights; the CSI still chooses the start phase within the clip). Track only."""
-    csi_strict_link_eps: float = 0.0
-    """> 0: an episode counts as a CSI success only if it also never had a contact link further than this [m] from the reference (``mdp.link_deviation``, the
-    quantity of the injection threshold); bookkeeping only, nothing terminates (default 0 = off). Track only."""
     start_balance_frac: float = 0.0
     """Fraction of the imagination starts drawn clip-balanced (as ``start_sampling="per_motion"``), the rest uniformly (default 0)."""
     start_sampling: str = "uniform"
@@ -122,7 +145,22 @@ class ACPRunnerCfg:
     lam: float = 0.95
     """GAE lambda of the critic targets (default 0.95)."""
     action_noise: float = 0.1
-    """Std of the Gaussian exploration noise added to the actions during real-env collection (default 0.1)."""
+    """Gaussian exploration noise of the real-env collection, as zita-ch/supermimic_vibed: std ``action_noise`` x alpha_j [rad] on the joint target, alpha_j the per-joint
+    SuperMimic action scale 0.25 * effort / (armature * (20 pi)^2) (``runner.sm_action_scale``: 0.35-0.55 rad; 0.1 -> 0.035-0.055 rad) (default 0.1)."""
+    contact_detect: str = "force_head"
+    """Contact decision of the nine contact bodies, shared by the environment and the imagination (must equal the env cfg's ``contact_detect``). "force_head" (default, the ACP
+    authors' SuperMimic): the env's |F_z| > 1 N and the world model's learned contact head (BCE against it, ``wm_contact_loss``). "sdf": the signed
+    distance d_b of the (exact capsule) collision geometry of each body to the terrain primitives (``sdf_contact.py``); the env decides ``d_b < d_on_b``, the imagination computes d_b from the
+    predicted state by forward kinematics and uses ``sigmoid(-(max(d_b, 0) - d_on_b) / sdf_tau)``; the Stage 2 hindsight labels use the same decision."""
+    wm_scan: str = "planner"
+    """Height scan of the world model and the critics (privileged; the actor and the planner keep the paper's 9 x 7 / 17 x 11): "planner" (default) = the 17 x 11 scan of the planner
+    (x +-0.8 m, y +-0.5 m, 0.1 m, centred on the pelvis, true pose; 187 values), "wide" = 31 x 15 points at 0.05 m, 0 .. 1.5 m ahead of the pelvis and +-0.35 m (the open-source
+    reproduction's CRITIC_SCAN; 465 values). "wide" sees nothing behind the pelvis, where 37 % of the labelled contacts of v3_final are (see PLAN.md "World-model / critic scan")."""
+    sdf_tau: float = 0.001
+    """Temperature [m] of the imagined soft contact in the "sdf" mode (0.001: p = .88 at the surface, .5 at d_on = 2 mm; the soft contact is one-sided, flat below the surface)."""
+    wm_contact_loss: bool | None = None
+    """Train the world model's contact head (BCE against the stored c^meas, log ``wm/contact_bce``). None (default): on for contact_detect "force_head", off for "sdf" (the world model
+    predicts states only; the contact is computed from the predicted state)."""
     geo_contact: bool = False
     """Imagination: the contact probabilities of the nine links in the rewards (track_contact_label, ...) come from the geometry of the robot state and the terrain
     (``geo_contact.py``: exact ray-cast clearance of the link surface points, ``sigmoid(-(clearance - d0)/tau)``) instead of the world model's contact head, which
@@ -132,7 +170,7 @@ class ACPRunnerCfg:
     geo_contact_tau: float = 0.008
     """Temperature [m] of the geometric contact probability."""
     clip_aliases: str = ""
-    """Path of a YAML file {old clip name: new clip name} used when the CSI phases are restored by name (a renamed clip keeps its phase; default: none)."""
+    """Path of a YAML file {old clip name: new clip name} used when the bins of a sidecar are restored by clip name (a renamed clip keeps its bins; default: none)."""
     imagine_ref_replay_eps: float = 0.0
     """Demonstration replay in the imagination (DiffMimic, threshold version; default 0 = off): when the largest height deviation of a contact link from the
     reference exceeds this [m] after an imagined step, the NEXT step starts from the reference state of that frame (no gradient through the replacement) instead
@@ -141,14 +179,13 @@ class ACPRunnerCfg:
     imagine_link_hazard_eps: float = 0.0
     """Soft link-deviation hazard in the imagination (default 0 = off): the continuation of every imagined step is combined with
     h = sigmoid((link_deviation - eps) / tau) of the predicted (not replaced) state, d = 1 - (1 - d)(1 - h), gradient kept. Leaving the reference by more than
-    eps [m] (the ``real_ref_inject_eps`` of the real collection) counts as a failure in the imagination too, consistent with the CSI. Track only."""
+    eps [m] (the ``real_ref_inject_eps`` of the real collection) counts as a failure in the imagination too, consistent with the real injection. Track only."""
     imagine_link_hazard_tau: float = 0.02
     """Temperature [m] of the soft link-deviation hazard."""
     real_ref_inject_eps: float = 0.0
     """Reference injection in the real collection (default 0 = off): when the largest height deviation of a contact link from the reference of a real env exceeds
     this [m], the env is NOT terminated but moved (teleported) to the reference state of the current frame; the transition is stored as the end of an episode
-    (``done``, not ``terminated``), the history restarts, and the CSI counts it as one failure of that clip (the episode does not count as a success later). Use
-    with the task ``Instinct-ACP-Track-NoLinkTerm-G1-v0``. Track only."""
+    (``done``, not ``terminated``) and the history restarts; the discounted return of the episode (for its start bin) keeps accumulating until the episode really ends. Track only."""
     abpt_one_step_weight: float = 0.0
     """Weight of the one-step (0-step critic) objective in the actor loss: loss = -((1 - w) J_H + w (r_0 + gamma V(s_1))) (ABPT-style value gradient: the critic
     that learned the real reward values gives the gradient for what the H-step return cannot differentiate; default 0)."""
@@ -168,12 +205,36 @@ class ACPRunnerCfg:
     """Critic fitting epochs per policy update (default 5)."""
     critic_minibatches: int = 4
     """Critic minibatches per epoch (default 4)."""
+    critic_hidden: str = "256,128"
+    """Hidden widths of the critic MLP(s), comma separated (default "256,128": SuperMimic Table A.4; "512,256,128": the ACP value networks, Materials and
+    Methods "three hidden layers with 512, 256, and 128 units and ELU activations"). Stage 3 uses it for both Vm and Vfs."""
     no_critic: bool = False
     """Ablation: no critic, i.e. no bootstrap value term in the return and no critic fit (default False)."""
     value_max: float = 0.0
     """Upper bound of the critic value wherever it is used (actor bootstrap at H and at the clip end, GAE targets; default 0 = off). The rewards are bounded
     (largest per-step reward = sum of the positive weights x dt), so no true value exceeds that / (1 - gamma); the bound only cuts off an overestimation feedback
     of the critic, e.g. through the never-regressed state after the clip end that the clip-end bootstrap queries."""
+    # ---- wmres: contact-triggered truncation of the imagination BPTT (research/glm_proposal.md, AHAC-style; default off) ----
+    wmres_cut: bool = False
+    """Truncate a start's imagined return at its first world-model contact event (a link's contact probability crossing ``wmres_cut_theta`` between
+    consecutive steps, optionally requiring a move of ``wmres_cut_flux``): the BPTT gradient does not flow through the event transition; the return continues
+    with the critic value of the last pre-event state, and the critic fit / GAE targets are NOT truncated (default False: the untruncated H-step objective)."""
+    wmres_cut_theta: float = 0.5
+    """Contact-probability threshold of the event detector (default 0.5)."""
+    wmres_cut_flux: float = 0.0
+    """Minimal probability change of the crossing link for an event (anti-dither; the analog of AHAC's stiffness threshold C; default 0: any crossing)."""
+    wmres_cut_alpha: float = 1.0
+    """Weight of the event step's reward in the truncated return: r_t* is scaled by 1 - alpha (default 1: the event transition is handed to the critic entirely)."""
+    wmres_cut_warmup_iters: int = 500
+    """Iterations before the truncation can fire (the contact head is noise before it is trained; default 500 = ``wm_only_iters``)."""
+    wmres_cut_max_frac: float = 0.9
+    """Safety valve: if the cut steps exceed this fraction of the batch's (H x B) steps, the batch falls back to the untruncated objective (default 0.9)."""
+    wmres_cap_clips: str = ""
+    """Per-clip horizon cap of the imagination BPTT: "prefix=H[,prefix=H...]" -- starts whose clip name starts with ``prefix`` trust only their first H
+    transitions and continue the return with the critic value of the state at H (the same truncation as ``wmres_cut``, at the fixed step H; default "":
+    no cap). Evidence (research/codex_diagnosis.md): the H32 BPTT direction of the ladder clips against the true physics gradient collapses (cosine .068)
+    while H8 / H16 stay usable (.695 / .493), and the world model is only supervised on 16-step windows -- e.g. "ladder=16" keeps the policy inside the
+    supervised horizon on the ladder and hands the rest to the critic. The critic fit / GAE targets are not capped."""
 
     # ---- schedule ----
     lr: float = 2e-4

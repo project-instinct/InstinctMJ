@@ -23,7 +23,7 @@ from instinct_mj.rl.acp.mdp import ODO_HIST
 from instinct_mj.rl.supermimic.mdp import unflatten_state
 from instinct_mj.tasks.registry import load_env_cfg, load_env_cls, load_instinct_rl_cfg
 
-TASK = "Instinct-ACP-Track-G1-v0"
+TASK = "Instinct-ACP-Track-G1-v1"
 OBS_SLICES = {
     "base_ang_vel": (0, 15), "projected_gravity": (15, 30), "joint_pos": (30, 145), "joint_vel": (145, 260), "last_action": (260, 375),
     "tracker_height_scan": (375, 438), "contact_targets": (438, 465), "goal_command": (465, 468),
@@ -48,7 +48,7 @@ def main() -> None:
     device = "cuda:0"
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = args.num_envs
-    cfg.curriculum["curriculum_state_init"].params["mode"] = "uniform"
+    cfg.curriculum["episode_start"].params["mode"] = "uniform"
     cfg.observations["policy"].enable_corruption = False  # observation noise off, DR / odometry / action delay stay on
     cfg.observations["policy"].terms["contact_targets"].params["noise"] = 0.0
     env = load_env_cls(TASK)(cfg=cfg, device=device)
@@ -116,10 +116,10 @@ def main() -> None:
             seen.append(obs.detach())
             return real_a[:, step["t"]]
 
-    def step_wm(S, a, a_prev, xi_n):
+    def step_wm(S, fk, a, a_prev, xi_n):
         S1 = unflatten_state(real_s1[:, step["t"]])
         step["t"] += 1
-        return real_a[:, step["t"] - 1], S1, torch.zeros(len(a), 9, device=device), torch.zeros((), device=device)
+        return real_a[:, step["t"] - 1], S1, runner.fk_all(S1), torch.zeros(len(a), 9, device=device), torch.zeros((), device=device)
 
     runner.ac.actor = Actor()
     runner.pol_norm = lambda x: x

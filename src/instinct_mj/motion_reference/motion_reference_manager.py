@@ -59,6 +59,7 @@ class MotionReferenceManager(Sensor):
         self._timestamp: torch.Tensor | None = None
         self._env_origins: torch.Tensor | None = None
         self._reference_entity = None
+        self._reference_frame_current = False
 
     def __str__(self):
         """Get the tabular information of the motion reference managed buffer."""
@@ -113,6 +114,7 @@ class MotionReferenceManager(Sensor):
         if not self._is_initialized or self._timestamp is None:
             return
         self._timestamp += dt
+        self._reference_frame_current = False
 
     def _compute_data(self) -> MotionReferenceData:
         """Return the motion reference data (mjlab Sensor cache interface)."""
@@ -171,6 +173,8 @@ class MotionReferenceManager(Sensor):
         """The reference state of all the articulations in the scene at current time step.
         (Acquired passively)
         """
+        if self._reference_frame_current:
+            return self._reference_frame
         outdated_mask = torch.logical_or(
             (self._reference_frame_timestamp - self._timestamp).abs() > 1e-6, self._reference_frame_timestamp < 1e-6
         )
@@ -194,6 +198,10 @@ class MotionReferenceManager(Sensor):
                     env_ids_to_augment = env_ids_this_buffer[self._env_symmetric_augmentation_mask[env_ids_this_buffer]]
                     self._symmetric_augment_reference_data(self._reference_frame, env_ids_to_augment)
             self._reference_frame_timestamp[outdated_mask] = self._timestamp[outdated_mask]
+        else:
+            # No clock change until update/reset. Keep the t=0 refresh semantics:
+            # a reset frame remains outdated even after it has been filled.
+            self._reference_frame_current = True
         return self._reference_frame
 
     @property
@@ -411,6 +419,7 @@ class MotionReferenceManager(Sensor):
             self.is_initialized
         ), "Motion reference manager is not initialized successfully. Please check the error message above."
         super().reset(env_ids)
+        self._reference_frame_current = False
         if env_ids is None:
             env_ids = self.ALL_INDICES
         env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)

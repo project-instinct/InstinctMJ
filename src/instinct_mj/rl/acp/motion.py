@@ -27,6 +27,9 @@ class ACPMotion(MotionLib):
 
     def __init__(self, manager, contacts: AcpReferenceContacts, device: str):
         super().__init__(manager, device)
+        if self.link_p.shape[1] > NUM_CONTACT:  # the SuperMimic tracked bodies after the contact links (SM-CH5TB): ``link_*`` stay the contact links, ``track_*`` have all
+            self.track_p, self.track_R, self.track_v, self.track_w = self.link_p, self.link_R, self.link_v, self.link_w
+            self.link_p, self.link_R, self.link_v, self.link_w = (x[:, :NUM_CONTACT] for x in (self.link_p, self.link_R, self.link_v, self.link_w))
         assert contacts.table_flag.shape[0] == len(self.clip_len)
         self.table_fps, self.table_num_frames, self.table_age = contacts.table_fps, contacts.table_num_frames, contacts.table_age
         self.table_flag, self.table_valid, self.table_pos = contacts.table_flag, contacts.table_valid, contacts.table_pos_w

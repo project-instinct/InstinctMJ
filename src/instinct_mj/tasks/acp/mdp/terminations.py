@@ -5,9 +5,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+from mjlab.managers import SceneEntityCfg
 from mjlab.utils.lab_api.math import quat_apply_inverse
 
-from .commands import AcpReferenceContacts, to_base_yaw_frame
+from mjlab.utils.lab_api.math import matrix_from_quat
+
+from instinct_mj.rl.acp.planner import CONTACT_LINKS, TRACKED_LINKS
+from instinct_mj.rl.acp.sdf_contact import VIOLATION_LINKS, VIOLATION_REF_CLEARANCE, get_violation_sdf
+
+from .commands import AcpReferenceContacts
+
+FEET = (CONTACT_LINKS.index("left_ankle_roll_link"), CONTACT_LINKS.index("right_ankle_roll_link"))
 
 if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
@@ -27,26 +35,28 @@ def pos_far_from_ref(
 
 
 def pos_xy_far_from_ref(env: ManagerBasedRlEnv, command_name: str, distance_threshold: float = 0.5) -> torch.Tensor:
-    """The pelvis is further than ``distance_threshold`` horizontally from the reference pelvis (a robot that stalls in front of an obstacle)."""
+    """The pelvis is horizontally further than ``distance_threshold`` from the reference pelvis (the robot lost the reference)."""
     term: AcpReferenceContacts = env.command_manager.get_term(command_name)
     return (term.base_pos_w[:, :2] - term.ref_base_pos_w[:, :2]).norm(dim=-1) > distance_threshold
 
 
-def contact_far_from_ref(env: ManagerBasedRlEnv, command_name: str, distance_threshold: float = 0.3, grace_frames: int = 2, frame: str = "world", upright_cos: float = 0.707) -> torch.Tensor:
-    """Contact-consistent termination: a contact link is further than ``distance_threshold`` (3-D) from its reference position while the reference is in contact with it; the first
-    ``grace_frames`` frames of every reference contact segment are ignored (touch-down timing). ``frame="world"``: world positions (``track_contact_pos_global``'s quantity);
-    ``frame="base"``: the actual and the reference positions in their own pelvis-yaw frames (``track_contact_pos_base``'s quantity), free of the horizontal drift of the root. The pelvis-yaw
-    frame is ill-conditioned when the pelvis is not upright: the termination only looks at the frames where the REFERENCE pelvis is upright (projected gravity z < -``upright_cos``, tilt < 45 deg)."""
+def feet_far_from_ref(env: ManagerBasedRlEnv, command_name: str, distance_threshold: float = 0.5) -> torch.Tensor:
+    """A foot (ankle roll link) is further than ``distance_threshold`` (3-D) from the reference foot (the robot lost the reference)."""
     term: AcpReferenceContacts = env.command_manager.get_term(command_name)
-    pos = term.robot.data.body_link_pos_w[:, term.contact_body_ids]
-    if frame == "base":
-        dist = (to_base_yaw_frame(pos, term.base_pos_w, term.base_quat_w) - to_base_yaw_frame(term.ref_link_pos_w, term.ref_base_pos_w, term.ref_base_quat_w)).norm(dim=-1)
-    else:
-        assert frame == "world"
-        dist = (pos - term.ref_link_pos_w).norm(dim=-1)
-    ref_pg_z = quat_apply_inverse(term.ref_base_quat_w, term.robot.data.gravity_vec_w)[:, 2]
-    active = term.ref_contact_flag & (term.ref_contact_age > grace_frames) & (ref_pg_z < -upright_cos).unsqueeze(-1)
-    return (active & (dist > distance_threshold)).any(-1)
+    feet = list(FEET)
+    pos = term.robot.data.body_link_pos_w[:, [term.contact_body_ids[i] for i in feet]]
+    return (pos - term.ref_link_pos_w[:, feet]).norm(dim=-1).max(-1).values > distance_threshold
+
+
+def body_contact_violation(env: ManagerBasedRlEnv, command_name: str, sensor_name: str, asset_cfg: SceneEntityCfg, threshold: float = 1.0) -> torch.Tensor:
+    """A body that must not touch the terrain (``asset_cfg``: the torso, which carries the head) has a terrain contact force above ``threshold`` within the last
+    policy step (the max over the physics substeps of the sensor history) while the reference body is further than ``VIOLATION_REF_CLEARANCE`` from the terrain
+    (exact SDF of its collision primitives at the reference pose): the contacts of get-up / crawl references are no violation."""
+    force = env.scene.sensors[sensor_name].data.force_history.norm(dim=-1).max(-1).values[:, asset_cfg.body_ids]
+    ref = env.command_manager.get_term(command_name).motion_reference.reference_frame
+    ids = [TRACKED_LINKS.index(n) for n in VIOLATION_LINKS]
+    d_ref = get_violation_sdf(env).distance(ref.link_pos_w[:, 0, ids], matrix_from_quat(ref.link_quat_w[:, 0, ids])).min(-1).values
+    return (force > threshold).any(-1) & (d_ref > VIOLATION_REF_CLEARANCE)
 
 
 def projected_gravity_far_from_ref(

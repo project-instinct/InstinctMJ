@@ -1,4 +1,4 @@
-"""Analytic MDP of the ACP Stage 3 task (``Instinct-ACP-Stage3-G1-v0``): the goal-reaching terms next to the tracking terms of ``mdp.py``.
+"""Analytic MDP of the ACP Stage 3 task (``Instinct-ACP-Stage3-G1-v1``): the goal-reaching terms next to the tracking terms of ``mdp.py``.
 
 ``ACPStage3MDP`` adds to ``ACPMDP`` what the goal-reaching environments need in imagination and for the labels of the real transitions:
 the goal rewards of paper Table 3 (``move2goal``, ``standatgoal``, ``flat_orientation``, ``ang_vel_xy``, ``slippage``; ``stumbling`` needs
@@ -11,7 +11,7 @@ The goal rewards are indicator functions in the paper. In imagination they are d
 relaxed to ``sigmoid(x / tau)`` (``hard=False``; ACP-unspecified temperatures, ``ACPStage3Cfg.goal_soft_tau_*``); ``hard=True`` evaluates the
 indicators exactly, as the env's reward terms do (parity check on real states).
 
-The terrain heights come from a ``RegionHeightScanner``: one dense heightmap for the reference-anchored terrains (the long strip of
+The terrain heights come from a ``RegionHeightScanner``: one dense heightmap for the reference-anchored terrains (the compact grid of
 motion-matched tiles) and one for the arena of procedural terrains; a dense map over their joint bounding box would be ten times larger.
 """
 
@@ -32,12 +32,11 @@ from .kinematics import ACPKinematics
 from .rays import ExactHeightScanner
 from .mdp import ACPMDP, INV_DIM, SCAN_NX, SCAN_NY, heading, wrap_to_pi
 from .motion import NUM_CONTACT, PELVIS, ACPMotion
-from .planner import CONTACT_LINKS
-from .sim import CONTACTS_COMMAND, HEIGHT_SCANNER_MAX_DISTANCE, HEIGHT_SCANNER_RESOLUTION, HEIGHT_SCANNER_SIZE
+from .sim import CONTACTS_COMMAND, make_kinematics, HEIGHT_SCANNER_MAX_DISTANCE, HEIGHT_SCANNER_RESOLUTION, HEIGHT_SCANNER_SIZE
 
 REF_ONLY_TERMS = (
     "track_base_pos", "track_base_vel", "track_joint_pos", "track_joint_vel", "track_contact_label", "track_contact_pos_base",
-    "track_contact_pos_global", "track_planned_contact",
+    "track_contact_pos_global", "track_planned_contact", "track_body_pos_anchor", "track_body_ori", "track_body_lin_vel", "track_body_ang_vel",
 )  # fmt: skip
 """Reward terms of the reference-following envs (masked off on the goal-reaching envs; the planned-contact term is on all envs when
 evaluated with the planner targets)."""
@@ -93,7 +92,7 @@ def build_stage3_mdp(env, heightmap_resolution: float, heightmap_cache_dir: str,
     manager = env.scene["motion_reference"]
     motion = ACPMotion(manager, env.command_manager.get_term(CONTACTS_COMMAND), device)
     joints = list(env.scene["robot"].joint_names)
-    kin = ACPKinematics(device, joints, list(CONTACT_LINKS), manager.cfg.robot_model_path)
+    kin = make_kinematics(env, manager, motion, device)
     kin_torso = ACPKinematics(device, joints, ["torso_link"], manager.cfg.robot_model_path)
     metadata_yaml = next(iter(manager.motion_buffers.values())).cfg.metadata_yaml
     model = env.sim.mj_model
@@ -219,13 +218,13 @@ class ACPStage3MDP(ACPMDP):
     def goal_critic_features(self, S, goal_pos, goal_yaw, t_norm, planned_b, planned_valid, xi_n) -> torch.Tensor:
         """Input of Vfs (privileged, noise-free): invariant state (tilt, body-frame velocities, joints), goal command g, horizontal
         distance d_g, vertical offset dz = z_goal - z_base, elapsed time over the horizon, the planner's predicted contacts (targets in the
-        base-yaw frame and validity), the full 17 x 11 scan of the true pose and the DR context."""
+        base-yaw frame and validity), the full critic scan (``critic_scan``) of the true pose and the DR context."""
         bp, bR = self.kin.forward(*S)[:2]
         pel_p, pel_R = bp[:, PELVIS], bR[:, PELVIS]
         dist = (goal_pos[:, :2] - pel_p[:, :2]).norm(dim=-1, keepdim=True)
         dz = (goal_pos[:, 2] - pel_p[:, 2]).unsqueeze(-1)
         return torch.cat((invariant_features(S), self.goal_command(pel_p, pel_R, goal_pos, goal_yaw), dist, dz, t_norm.unsqueeze(-1),
-                          planned_b.flatten(1), planned_valid.float(), self.scan(pel_p, pel_R), xi_n), -1)  # fmt: skip
+                          planned_b.flatten(1), planned_valid.float(), self.critic_scan(pel_p, pel_R), xi_n), -1)  # fmt: skip
 
     def goal_critic_dim(self) -> int:
-        return INV_DIM + GOAL_CRITIC_EXTRA + SCAN_NY * SCAN_NX + self.xi_dim
+        return INV_DIM + GOAL_CRITIC_EXTRA + self.critic_scan_dim + self.xi_dim

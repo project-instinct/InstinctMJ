@@ -5,10 +5,15 @@ The file is an unmodified copy (``resources/acp_g1``, see its README). What the 
 the mocap goal sphere, the sensors and the motor actuators (mjlab adds its own position / velocity actuators); the geoms that default to
 geom group 0 (the collision meshes) move to group 3, because the task's height scanner casts against group 0 (the terrain) only.
 
-``simplified_collision=True`` (default off) replaces the collision *meshes* of the upper body / arms with analytic primitives copied from
-InstinctMJ's G1 popsicle model (``assets/resources/unitree_g1/xml/g1_29dof_torsobase_popsicle.xml``); the legs (hip pitch/roll/yaw, knee,
-ankle pitch/roll) and the 7 foot capsules keep the authors' meshes exactly. Visual meshes are never touched, the body masses / inertias are
-identical (the primitives have ``density=0`` and every body keeps its ``<inertial>``). See ``COLLISION_SIMPLIFY.md``.
+``simplified_collision=True`` (default off; geometry v3) replaces ALL the collision *meshes* of the body and the legs / arms (and the
+authors' shoulder pitch / roll cylinders) with analytic primitives. The torso capsules are copied from InstinctMJ's G1 popsicle model
+(``assets/resources/unitree_g1/xml/g1_29dof_torsobase_popsicle.xml``); each limb segment is one continuous capsule: the upper arm is a single
+capsule on ``shoulder_yaw`` (popsicle's length / position, radius fitted to the authors' shell), the thigh is a single capsule on ``hip_yaw``
+that overlaps the ``hip_roll`` primitives (no gap at the hip; the hip_roll itself is two capsules, an L for the block + front plate), the
+shank is one capsule on ``knee``. The robot's collision shell is then mesh-free: only the 7 foot capsules per ankle (``ankle_roll``, they
+define the ``foot`` contact body) stay as the authors made them; the small ankle_pitch collision plate is deleted, not replaced. Visual
+meshes are never touched, the body masses / inertias are identical (the primitives have ``density=0`` and every body keeps its
+``<inertial>``). See ``COLLISION_SIMPLIFY.md``.
 """
 
 from __future__ import annotations
@@ -23,8 +28,12 @@ __file_dir__ = os.path.dirname(os.path.realpath(__file__))
 ACP_G1_XML: str = os.path.join(__file_dir__, "resources/acp_g1/g1_29dof.xml")
 ACP_G1_MESHES_DIR: str = os.path.join(__file_dir__, "resources/acp_g1/meshes")
 
-# Bodies whose collision mesh copies are removed by ``simplified_collision``. The ankle pitch / roll links are deliberately absent: the
-# authors' 7 foot capsules define the ``foot`` contact body, they stay exactly as they are.
+# Bodies whose collision meshes / cylinders are removed by ``simplified_collision``. The ankle *roll* links are deliberately absent: the
+# authors' 7 foot capsules define the ``foot`` contact body, they stay exactly as they are. The ankle *pitch* bodies get their small
+# collision plate deleted and are not replaced (v3): it is 3.6 x 1.3 x 3.8 cm, thin enough that no capsule / sphere stays within 5 mm of
+# it, and the shank capsule already covers its upper half. What it leaves is a collision-free band between the shank capsule and the
+# foot capsules (17.6 mm at the default pose, 17.6-18.7 mm over the ankle pitch / roll limits, see the note below): a hole in the
+# self-collision shell, not in the ground contact (the foot capsules still touch the terrain first).
 SIMPLIFIED_COLLISION_BODIES: tuple[str, ...] = (
     "pelvis",
     "waist_yaw_link",
@@ -52,15 +61,18 @@ SIMPLIFIED_COLLISION_BODIES: tuple[str, ...] = (
     "right_hip_roll_link",
     "right_hip_yaw_link",
     "right_knee_link",
+    "left_ankle_pitch_link",
+    "right_ankle_pitch_link",
 )
 
 _MESH = mujoco.mjtGeom.mjGEOM_MESH
 _CAPSULE = mujoco.mjtGeom.mjGEOM_CAPSULE
 _SPHERE = mujoco.mjtGeom.mjGEOM_SPHERE
+_CYLINDER = mujoco.mjtGeom.mjGEOM_CYLINDER
 
 # Primitives of the replaced bodies, in the body frame of the ACP model (same Unitree URDF frames). Tuple: (type, size, pos, quat).
-# The torso capsules are from ``g1_29dof_torsobase_popsicle.xml``. The ACP model has its own analytic cylinders on the shoulder pitch /
-# roll links (the authors' collision for the shoulder ball); they are kept.
+# The torso capsules are from ``g1_29dof_torsobase_popsicle.xml``. The authors' analytic cylinders on the shoulder pitch / roll links are
+# removed (v2): like the popsicle, the shoulder is covered by the one upper-arm capsule.
 #
 # Everything else is fitted to the ACP meshes: the primitive stays inside the outer shell, not around it. That is deliberate
 # (``# ACP-unspecified``): a capsule that contains the whole mesh looks and behaves 1-2 cm fatter than the robot, so each primitive is
@@ -69,12 +81,14 @@ _SPHERE = mujoco.mjtGeom.mjGEOM_SPHERE
 # per contact body, all <= 2 mm).
 #
 # Notes on single bodies (all measured on the compiled models):
-# * shoulder_yaw / elbow: one capsule along each bone, cropped at the joints, radius 3.1 / 3.0 cm (the shells are 6.4-7.0 cm across;
-#   the radii are sized to their outer surface, so the collision limb is as thick as the visual one). The two shells are separate rings
-#   around the elbow joint (a 3.6 mm hollow between them), and the upper-arm capsule is 1.6 cm off the elbow joint axis, so the joint
-#   itself read as a hole; a sphere r=3.1 on the elbow link, centred under the shoulder-yaw axis, fills it and matches the hinge width
-#   (# ACP-unspecified: the authors have no elbow collision primitive to copy). The 5.7 cm shoulder cup and the elbow fork still stay
-#   outside it.
+# * shoulder_yaw / elbow (v2): the upper arm is one capsule on shoulder_yaw (popsicle's pos / half-length, r = 3.1 cm: the shells are
+#   6.4-7.0 cm across, sized to their outer surface), spanning the shoulder to the elbow; the forearm is one capsule on the elbow link
+#   (r = 3.0 cm). The two shells are separate rings around the elbow joint (a 3.6 mm hollow between them), and the upper-arm capsule is
+#   1.6 cm off the elbow joint axis, so the joint itself read as a hole; a sphere r=3.1 on the elbow link, centred under the shoulder-yaw
+#   axis, fills it and matches the hinge width (# ACP-unspecified: the authors have no elbow collision primitive to copy). The capsule
+#   reaches ~1.4 cm from the torso capsules with the arm hanging; upper arm / torso are not parent and child, so they do collide when the
+#   arm is pressed in (shoulder roll beyond ~0.15 rad of adduction), the same onset as the v1 geometry, never at rest or in the reference
+#   motions.
 # * wrist: the popsicle ``wrist_yaw`` capsule is its rubber *hand*, not the wrist. The three welded wrist links (roll / pitch / yaw, the
 #   ACP model keeps them as bodies) each carry their own capsule along x, fitted to their own shell, plus the hand sphere on ``yaw``, so
 #   the ``hand`` contact body is the sphere + the 4.2 cm yaw shell, and the middle of the lower arm is collision-only. ``label_contacts``
@@ -82,15 +96,40 @@ _SPHERE = mujoco.mjtGeom.mjGEOM_SPHERE
 # * pelvis: a y-axis capsule 12 cm across / 13.4 cm wide (the mesh is 12.0 x 13.6 x 12.4 cm) instead of the popsicle's 14 cm sphere.
 #   With the hip motors it forms the ``pelvis`` contact body; sitting on it lands 2 mm high, lying on the back 1.4 mm high.
 # * hip_pitch (the motor the G1 sits on): sphere r=0.048, lowest point 0.3 mm above the mesh's.
-# * hip_roll / hip_yaw (thigh): slim capsules, 8.4 cm and 7.2 cm across. The mesh's 15.3 cm x-extent is the knee-guard plate.
+# * hip_roll (v3, two primitives): the mesh is an L in the x-z side view: a bottom block x [-1.8, +7.2] cm, z [-11.1, -5.8] cm (8.4 cm
+#   wide in y) and a front plate x [+3.3, +7.2] cm, z [-5.8, +3.4] cm. One z capsule cannot be both: v2 (r = 4.2 cm, 8.4 cm across, centre
+#   (2.7, 0, -3.8) cm) matched the block, but its rear hemisphere ran up to z = +3.4 cm at x = -1.5 cm, i.e. 4.8 cm of extra volume behind
+#   the plate's back wall (x = +3.25 cm) -- the fat hip / butt in the renders. v3 splits it at the L's step (z = -5.8 cm):
+#   - block: x-axis capsule, r = 4.0 cm, half length 0.5 cm, centre (2.75, 0, -9.8) cm -> x [-1.75, +7.25], z [-13.8, -5.8] cm.
+#   - plate: z-axis capsule, r = 2.0 cm, half length 2.6 cm, centre (5.0, 0, -1.2) cm -> x [+3.0, +7.0], z [-5.8, +3.4] cm. Thinner than
+#     the 3.9 cm plate on purpose: anything thicker in x or reaching above z = -5.8 cm re-creates the rear bulge.
+#   Fit to the visual mesh (surface samples / mesh vertices): primitive-outside-mesh p95 2.3 cm, max 2.7 cm; mesh-not-covered p95 2.2 cm,
+#   max 2.6 cm (v2: 3.6 / 4.8 and 2.1 / 2.3). Inside the mesh's own z range the protrusion is p95 0.6 cm, max 0.9 cm; the 2.7 cm maximum is
+#   the block's bottom cap 2.4 cm below the mesh floor, 1.4 cm inside the thigh mesh at the default pose (hip_roll is the thigh's parent,
+#   so it is filtered). The 2.2 cm uncovered is the plate's sides (|y| 2.0 vs 4.2 cm), where the hip_pitch sphere (r = 4.8 cm) sits next
+#   to it. Overlaps hip_pitch by 1.8 cm (v2 6.2 cm) and the thigh / hip_yaw by 3.3 cm (v2 0.5 cm) at the default pose, -1.8 / -3.3 cm at
+#   the worst hip joint limit: still attached at every pose, no new seam.
+# * hip_yaw (thigh, v2): a slim capsule, 7.2 cm across. The mesh's 15.3 cm x-extent is the knee-guard plate.
 #   The thigh capsule is tilted onto the hip -> knee line (knee joint at (-0.0783, 0.0021, -0.1773): 0.416 rad, 23.8 deg about y) and
 #   pushed 1.0 cm forward of that line (along the shell's wide axis), into the middle of the mesh: the shell is lopsided around the
 #   joint line (5.3 cm in front of it, 1.9 cm behind at mid-thigh), so a capsule centred on the line stuck out of the back by ~1.7 cm.
 #   The shape is not representable by one capsule (the knee-guard plate), so the surface still deviates by p95 1.9 cm, max 3.2 cm.
+#   v1 stopped the thigh capsule 0.096 m up the axis from its centre and left a 3.7 cm hole (z 0.506 .. 0.543 at the default pose) to the
+#   hip_roll capsule although the two shells are joined (along this axis the thigh mesh spans [-0.106, +0.118] from the capsule centre and
+#   hip_roll's [0.113, 0.266]). v2 extends the thigh capsule up to +0.140 on the axis (half length 0.060 -> 0.082, centre moved 2.2 cm along
+#   the axis), overlapping the hip_roll capsule by 5 mm at the default pose (4.8 mm at the hip_yaw limit); the two are parent / child, so
+#   the overlap never collides. The bottom end (-0.096) is unchanged: it sits inside the knee capsule (3.9 cm overlap).
 # * knee (shank): a capsule along the shank (7.2 cm across, as wide as the mesh's thin axis, 32 cm long) plus a short x-axis capsule that
 #   reproduces the knee cap (7.2 cm wide, reaching 6.4 cm in front of the joint like the mesh). Rounded, so the knee slides over step
 #   edges instead of catching on them; kneeling lands 0.4 mm high. ``*_knee_link`` and its parent thigh are a parent / child pair, so the
 #   filterparent does not let them collide at any flexion (checked to hip -2.4 rad / knee 2.8 rad, and against the pelvis it clears).
+# * ankle_pitch (v3): the authors' collision mesh (3.6 x 1.3 x 3.8 cm plate around the pitch axis) is removed, not replaced: it is thin
+#   enough that no capsule / sphere fits it inside 5 mm, and the shank capsule already covers its upper half. The ankle is therefore
+#   collision-free between the shank capsule and the authors' 7 foot capsules: 1.76 cm at the default pose, 2.08 cm at the pitch upper
+#   limit, 0.87 cm at the pitch lower limit (toe down), 1.62-1.63 cm at the roll limits. Foot contact is unchanged: the deleted plate sat
+#   1.76 cm above the capsules' tops, and nothing else was added, so the foot capsules are still the lowest geoms of the leg and the
+#   terrain meets them first at every pose. With ``simplified_collision`` the robot has no collision mesh left at all (39 capsules, 6
+#   spheres); mujoco_warp's MULTICCD warning then lists only ``CAPSULE-CYLINDER`` (the terrain's cylinders).
 _SIMPLIFIED_COLLISION_GEOMS: dict[str, tuple[tuple[int, tuple[float, float, float], tuple[float, float, float], tuple[float, float, float, float]], ...]] = {
     "pelvis": ((_CAPSULE, (0.06, 0.008, 0.0), (0.0, 0.0, -0.09), (0.707105, 0.707108, 0.0, 0.0)),),
     "torso_link": (
@@ -99,16 +138,14 @@ _SIMPLIFIED_COLLISION_GEOMS: dict[str, tuple[tuple[int, tuple[float, float, floa
         (_CAPSULE, (0.065, 0.02, 0.0), (0.005, 0.0, 0.06), (0.707105, 0.707108, 0.0, 0.0)),
         (_CAPSULE, (0.068, 0.005, 0.0), (0.01, 0.0, 0.415), (-3.67321e-06, 1.0, 0.0, 0.0)),
     ),
-    # Arms: capsule axis along each link, cropped at the joints so neither capsule pokes through the neighbouring segment
-    # (upper arm spans shoulder->elbow, 8.2 cm of bone / 11.4 cm of capsule; forearm spans elbow->wrist_roll, 10.1 cm of bone /
-    # 10.0 cm of capsule). Without the crop each capsule ran ~3 cm past the elbow, which is what made the arm read as "too long".
-    # Radius sized to the outer shell (6.2 / 6.0 cm across vs the shell's 6.4-7.0 cm): the arm reads as thick as the visual model,
-    # and the joint sphere below is the same width. The elbow joint gets its own sphere: the two shells are separate rings (a 3.6 mm
-    # hollow in the ACP meshes) and the upper-arm capsule sits 1.6 cm off the joint axis, so without it the joint reads as a hole
-    # between the two capsules (and the joint would not be a contact surface at all). It is centred under the shoulder-yaw axis
-    # (x = -1.6 cm in the elbow frame), the way the two shells close the joint there.
-    "left_shoulder_yaw_link": ((_CAPSULE, (0.031, 0.026, 0.0), (0.0, 0.0, -0.025), (-3.67321e-06, 1.0, 0.0, 0.0)),),
-    "right_shoulder_yaw_link": ((_CAPSULE, (0.031, 0.026, 0.0), (0.0, 0.0, -0.025), (-3.67321e-06, 1.0, 0.0, 0.0)),),
+    # Arms (geometry v2): the upper arm is ONE capsule on the shoulder_yaw link, like InstinctMJ's popsicle (same pos / length / flip), from
+    # the shoulder (the authors' shoulder pitch / roll cylinders are gone) down to the elbow. Spans z in [-0.080, +0.050] of the yaw frame
+    # plus the 3.1 cm hemispherical caps, i.e. up to the lower edge of the shoulder cup and down to the elbow joint sphere below.
+    # The forearm is the elbow link's capsule. Radius 3.1 cm as before (sized to the shell, whose width is 6.4-7.0 cm).
+    # The elbow joint gets its own sphere: the two shells are separate rings (a 3.6 mm hollow in the ACP meshes) and the upper-arm
+    # capsule sits 1.6 cm off the joint axis, so without it the joint reads as a hole (# ACP-unspecified).
+    "left_shoulder_yaw_link": ((_CAPSULE, (0.031, 0.065, 0.0), (0.0, 0.0, -0.015), (-3.67321e-06, 1.0, 0.0, 0.0)),),
+    "right_shoulder_yaw_link": ((_CAPSULE, (0.031, 0.065, 0.0), (0.0, 0.0, -0.015), (-3.67321e-06, 1.0, 0.0, 0.0)),),
     "left_elbow_link": (
         (_CAPSULE, (0.030, 0.020, 0.0), (0.050, 0.0, -0.01), (0.707105, 0.0, -0.707108, 0.0)),
         (_SPHERE, (0.031, 0.0, 0.0), (-0.016, 0.0, 0.002), (1.0, 0.0, 0.0, 0.0)),
@@ -141,10 +178,16 @@ _SIMPLIFIED_COLLISION_GEOMS: dict[str, tuple[tuple[int, tuple[float, float, floa
     # Legs (see the note above): hip_pitch = the motor ball, hip_roll / hip_yaw = thigh, knee = shank capsule + knee cap.
     "left_hip_pitch_link": ((_SPHERE, (0.048, 0.0, 0.0), (0.0, 0.0494, -0.032), (1.0, 0.0, 0.0, 0.0)),),
     "right_hip_pitch_link": ((_SPHERE, (0.048, 0.0, 0.0), (0.0, -0.0494, -0.032), (1.0, 0.0, 0.0, 0.0)),),
-    "left_hip_roll_link": ((_CAPSULE, (0.042, 0.030, 0.0), (0.027, 0.0, -0.038), (1.0, 0.0, 0.0, 0.0)),),
-    "right_hip_roll_link": ((_CAPSULE, (0.042, 0.030, 0.0), (0.027, 0.0, -0.038), (1.0, 0.0, 0.0, 0.0)),),
-    "left_hip_yaw_link": ((_CAPSULE, (0.036, 0.060, 0.0), (-0.03845, 0.0, -0.11204), (0.978481, 0.0, 0.206335, 0.0)),),
-    "right_hip_yaw_link": ((_CAPSULE, (0.036, 0.060, 0.0), (-0.03845, 0.0, -0.11204), (0.978481, 0.0, 0.206335, 0.0)),),
+    "left_hip_roll_link": (
+        (_CAPSULE, (0.040, 0.005, 0.0), (0.0275, 0.0, -0.098), (0.707105, 0.0, 0.707108, 0.0)),
+        (_CAPSULE, (0.020, 0.026, 0.0), (0.050, 0.0, -0.012), (1.0, 0.0, 0.0, 0.0)),
+    ),
+    "right_hip_roll_link": (
+        (_CAPSULE, (0.040, 0.005, 0.0), (0.0275, 0.0, -0.098), (0.707105, 0.0, 0.707108, 0.0)),
+        (_CAPSULE, (0.020, 0.026, 0.0), (0.050, 0.0, -0.012), (1.0, 0.0, 0.0, 0.0)),
+    ),
+    "left_hip_yaw_link": ((_CAPSULE, (0.036, 0.082, 0.0), (-0.02956, 0.0, -0.09192), (0.978481, 0.0, 0.206335, 0.0)),),
+    "right_hip_yaw_link": ((_CAPSULE, (0.036, 0.082, 0.0), (-0.02956, 0.0, -0.09192), (0.978481, 0.0, 0.206335, 0.0)),),
     "left_knee_link": (
         (_CAPSULE, (0.036, 0.124, 0.0), (0.012, 0.0, -0.155), (1.0, 0.0, 0.0, 0.0)),
         (_CAPSULE, (0.036, 0.015, 0.0), (0.013, 0.0, -0.020), (0.707105, 0.0, 0.707108, 0.0)),
@@ -173,7 +216,8 @@ def _simplify_collision(spec: mujoco.MjSpec) -> None:
         rgba = [0.7, 0.7, 0.7, 1.0]
         removed = []
         for geom in list(body.geoms):
-            if geom.type == _MESH and geom.group == 3:  # group 1 = the visual mesh, which is kept
+            # group 1 = the visual mesh, which is kept; the authors' shoulder pitch / roll cylinders go too (v2: one upper-arm capsule)
+            if geom.group == 3 and geom.type in (_MESH, _CYLINDER):
                 removed.append(geom)
         if removed:
             # Contact parameters of the meshes being replaced (all default in the ACP file: friction 1 0.005 1e-4, condim 3,
@@ -232,6 +276,11 @@ def get_acp_g1_spec(simplified_collision: bool = False) -> mujoco.MjSpec:
     pelvis.quat = [1.0, 0.0, 0.0, 0.0]
     if simplified_collision:
         _simplify_collision(spec)
+    # No self-collision (as zita-ch/supermimic_vibed, ``enabled_self_collisions=False``): contype 2 / conaffinity 1 never matches between two robot
+    # geoms, while the terrain (contype 1) still collides with every robot collision geom (its contype & the robot's conaffinity).
+    for geom in spec.geoms:
+        if geom.contype or geom.conaffinity:
+            geom.contype, geom.conaffinity = 2, 1
     return spec
 
 

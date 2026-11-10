@@ -12,7 +12,7 @@ from .kinematics import ACPKinematics
 from .mdp import NUM_J, XI_ARM, XI_COM, XI_FRIC, XI_KD, XI_KP, XI_MASS, XI_STATIC, XI_STATIC_DIM, ACPMDP
 from .motion import ACPMotion
 from .rays import ExactHeightScanner
-from .planner import CONTACT_LINKS
+from .planner import CONTACT_LINKS, TRACKED_LINKS
 
 CONTACTS_COMMAND = "acp_reference_contacts"
 GOAL_COMMAND = "acp_goal"
@@ -87,17 +87,31 @@ class ACPSimReader(SimReader):
         return xi[:, XI_STATIC]
 
 
-def build_mdp(env, heightmap_resolution: float, heightmap_cache_dir: str, device: str, exact_scan: bool = False):
+def make_kinematics(env, manager, motion: ACPMotion, device: str) -> ACPKinematics:
+    """Forward kinematics of the tracked bodies of the motion reference (the nine contact links first, then the SuperMimic tracked bodies)."""
+    tracked = list(TRACKED_LINKS[: motion.track_p.shape[1]])
+    return ACPKinematics(device, list(env.scene["robot"].joint_names), tracked, manager.cfg.robot_model_path, num_primary=len(CONTACT_LINKS))
+
+
+def build_mdp(env, heightmap_resolution: float, heightmap_cache_dir: str, device: str, exact_scan: bool = False, lazy_exact_heightmap: bool = False):
     """Instantiate FK, motion library, height scanner (the 0.05 m height map, or with ``exact_scan`` exact ray casts with its gradient) and analytic
     MDP for the live (unwrapped) env."""
     manager = env.scene["motion_reference"]
     motion = ACPMotion(manager, env.command_manager.get_term(CONTACTS_COMMAND), device)
-    kin = ACPKinematics(device, list(env.scene["robot"].joint_names), list(CONTACT_LINKS), manager.cfg.robot_model_path)
+    kin = make_kinematics(env, manager, motion, device)
     metadata_yaml = next(iter(manager.motion_buffers.values())).cfg.metadata_yaml
-    heights, x0, y0 = load_or_build_heightmap(env.sim.mj_model, metadata_yaml, heightmap_resolution, heightmap_cache_dir)
+    loader = None
+    if exact_scan and lazy_exact_heightmap:
+        import numpy as np
+        # Only pattern offsets are read before ExactHeightScanner takes over. The real map is loaded on demand.
+        heights, x0, y0 = np.zeros((2, 2), dtype=np.float32), 0.0, 0.0
+        loader = lambda: load_or_build_heightmap(env.sim.mj_model, metadata_yaml, heightmap_resolution, heightmap_cache_dir)
+        print('[exact scan] deferring unused auxiliary heightmap; ground_height will load the real map on demand', flush=True)
+    else:
+        heights, x0, y0 = load_or_build_heightmap(env.sim.mj_model, metadata_yaml, heightmap_resolution, heightmap_cache_dir)
     scanner = HeightScanner(
         heights, x0, y0, heightmap_resolution, HEIGHT_SCANNER_SIZE, HEIGHT_SCANNER_RESOLUTION, HEIGHT_SCANNER_MAX_DISTANCE, device
     )
     if exact_scan:
-        scanner = ExactHeightScanner(env, scanner)
+        scanner = ExactHeightScanner(env, scanner, heightmap_loader=loader)
     return motion, kin, scanner, ACPMDP(kin, motion, scanner, env, env.step_dt, device)

@@ -45,7 +45,7 @@ SUFFIX = "__policy"
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("checkpoint", nargs="?", default=None, help="model_<iteration>.pt (default: the newest of logs/instinct_rl/g1_acp_track_final6)")
-    parser.add_argument("--task", default="ch5", help="task id, or sm / xy / bm / c / ch5 for Instinct-ACP-Track-SM[-XY|-BM|-C|-CH5]-G1-v0 (the terminations of the run the checkpoint comes from)")
+    parser.add_argument("--task", default="Instinct-ACP-Track-G1-v1", help="task id (the terminations of the run the checkpoint comes from)")
     parser.add_argument("--out-root", default="~/Datasets/acp/rollouts")
     parser.add_argument("--num-envs", type=int, default=128, help="clips recorded in parallel (one env per clip)")
     parser.add_argument("--max-steps", type=int, default=1100, help="control steps per batch of clips (longer than the longest clip)")
@@ -56,7 +56,6 @@ def main() -> None:
     if args.checkpoint is None:
         args.checkpoint = max(glob.glob("logs/instinct_rl/g1_acp_track_final6/*/model_*.pt"), key=lambda p: int(re.search(r"model_(\d+)\.pt", p).group(1)))
     args.checkpoint = os.path.abspath(args.checkpoint)
-    args.task = {"sm": "Instinct-ACP-Track-SM-G1-v0", "xy": "Instinct-ACP-Track-SM-XY-G1-v0", "bm": "Instinct-ACP-Track-SM-BM-G1-v0", "c": "Instinct-ACP-Track-SM-C-G1-v0", "ch5": "Instinct-ACP-Track-SM-CH5-G1-v0"}.get(args.task, args.task)
     device = "cuda:0"
     cfg = load_env_cfg(args.task)
     cfg.scene.num_envs = args.num_envs
@@ -65,8 +64,6 @@ def main() -> None:
     for actuator in cfg.scene.entities["robot"].articulation.actuators:
         actuator.delay_max_lag = 0
     cfg.events["reset_robot"].params["randomize_velocity_range"] = {}
-    for name in ("contact_far_from_ref", "base_xy_too_far", "link_pos_too_far"):
-        cfg.terminations.pop(name, None)
     env = load_env_cls(args.task)(cfg=cfg, device=device)
     vec = InstinctRlVecEnvWrapper(env, policy_group="policy", critic_group="critic")
     agent = load_instinct_rl_cfg(args.task).to_dict()
@@ -76,10 +73,9 @@ def main() -> None:
     runner.setup_training()
     policy = runner.get_inference_policy(device=device)
     torch.set_grad_enabled(False)
-    csi = env.curriculum_manager.get_term_cfg("curriculum_state_init").func
-    csi.mode = "start"  # every episode starts at phase 0 of its clip
-    csi.bins = csi.return_sampling = False
-    mb, mdp, reader, motion = csi.motion_buffer, runner.mdp, runner.reader, runner.motion
+    start = env.curriculum_manager.get_term_cfg("episode_start").func
+    start.mode = "start"  # every episode starts at phase 0 of its clip
+    mb, mdp, reader, motion = start.motion_buffer, runner.mdp, runner.reader, runner.motion
     names = runner.motion_names
     metadata = yaml.safe_load(open(os.path.join(dataset, "metadata.yaml")))
     entries = metadata["motion_files"]

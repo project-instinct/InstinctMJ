@@ -1,5 +1,7 @@
-"""Checks of the ACP Stage 3 task (``Instinct-ACP-Stage3-G1-v0``) on the live env (small: 64 envs by default).
+"""Checks of the ACP Stage 3 task (``Instinct-ACP-Stage3-G1-v1``) on the live env (small: 64 envs by default).
 
+0. arena layout (P0 of the env audit): the arena rectangle and every compiled terrain geom of the arena are disjoint from the reference tile grid and its geoms
+   (AABB), and mujoco ray casts at the sampled spawn / goal points of every arena tile hit the analytic surface height of that tile (no foreign geometry),
 1. env layout: reference / goal-reaching envs, the spawn of every goal env on its tile (surface height from the boxes), the goal on the surface,
 2. the two-region analytic heightmap (``RegionHeightScanner``) against mujoco ray casts on the arena and on the reference terrains,
 3. goal reward terms: the env's reward manager vs the analytic ``ACPStage3MDP.reward_mixed`` (indicators exact) on real states, including
@@ -26,11 +28,79 @@ from instinct_mj.rl.acp.sim import ACPSimReader
 from instinct_mj.rl.acp.stage3_config import ACPStage3Cfg
 from instinct_mj.rl.supermimic.rotations import mm, so3_exp
 from instinct_mj.rl.acp.stage3_mdp import GOAL_TERMS, REF_ONLY_TERMS, build_stage3_mdp
-from instinct_mj.tasks.acp.goal_terrains import BASE_STAND_HEIGHT, NUM_LEVELS, TERRAIN_TYPES, TILE_SIZE, surface_height
+from instinct_mj.tasks.acp.goal_terrains import ARENA_GEOM_PREFIX, BASE_STAND_HEIGHT, NUM_LEVELS, TERRAIN_TYPES, TILE_SIZE, surface_height
+from instinct_mj.tasks.acp.terrain_layout import grid_bounds, tile_corner
 from instinct_mj.tasks.acp.mdp import goal as goal_mdp
 from instinct_mj.tasks.registry import load_env_cfg, load_env_cls
 
-TASK = "Instinct-ACP-Stage3-G1-v0"
+TASK = "Instinct-ACP-Stage3-G1-v1"
+
+
+def _world_aabb_xy(model, data, ids) -> tuple[np.ndarray, np.ndarray]:
+    """(N, 2) lo / hi world xy of the AABBs of the geoms ``ids`` (box of the local geom AABB rotated into the world)."""
+    centre, half = model.geom_aabb[ids, :3], model.geom_aabb[ids, 3:]
+    R = data.geom_xmat[ids].reshape(-1, 3, 3)
+    c = data.geom_xpos[ids] + np.einsum("nij,nj->ni", R, centre)
+    h = np.einsum("nij,nj->ni", np.abs(R), half)
+    return (c - h)[:, :2], (c + h)[:, :2]
+
+
+def check_arena_layout(env, failures: list, samples: int = 64) -> None:
+    """Arena vs reference tile grid (rectangles and compiled geoms), and ray-cast heights at sampled spawn / goal points of every arena tile."""
+    print("\n== arena layout: no overlap with the reference tiles, ray heights at spawn / goal ==")
+    arena = env.cfg.scene.arena
+    generator = env.cfg.scene.terrain.terrain_generator
+    n_ref = generator.num_rows * generator.num_cols
+    size = tuple(generator.size)
+    ref_lo, ref_hi = grid_bounds(n_ref, size)
+    lo, hi = arena.bounds
+    print(f"reference grid x [{ref_lo[0]:.1f}, {ref_hi[0]:.1f}] y [{ref_lo[1]:.1f}, {ref_hi[1]:.1f}] ({n_ref} tiles of {size[0]:g} x {size[1]:g}); arena x [{lo[0]:.1f}, {hi[0]:.1f}] y [{lo[1]:.1f}, {hi[1]:.1f}]; "
+          f"gap {max(lo[0] - ref_hi[0], ref_lo[0] - hi[0], lo[1] - ref_hi[1], ref_lo[1] - hi[1]):.1f} m")  # fmt: skip
+    if np.all(lo < ref_hi) and np.all(ref_lo < hi):
+        failures.append("arena rectangle overlaps the reference tile grid")
+    model = env.sim.mj_model
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    terrain = model.body("terrain").id
+    names = np.array([mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or "" for i in range(model.ngeom)])
+    is_arena = np.char.startswith(names, ARENA_GEOM_PREFIX)
+    ref_ids = np.flatnonzero((model.geom_bodyid == terrain) & ~is_arena & (model.geom_type != mujoco.mjtGeom.mjGEOM_PLANE))
+    arena_ids = np.flatnonzero((model.geom_bodyid == terrain) & is_arena)
+    a_lo, a_hi = _world_aabb_xy(model, data, arena_ids)
+    r_lo, r_hi = _world_aabb_xy(model, data, ref_ids)
+    print(f"{len(ref_ids)} reference geoms x [{r_lo[:, 0].min():.1f}, {r_hi[:, 0].max():.1f}] y [{r_lo[:, 1].min():.1f}, {r_hi[:, 1].max():.1f}]; {len(arena_ids)} arena geoms x [{a_lo[:, 0].min():.1f}, {a_hi[:, 0].max():.1f}] y [{a_lo[:, 1].min():.1f}, {a_hi[:, 1].max():.1f}]")  # fmt: skip
+    if (a_lo.min(0) < lo - 1e-3).any() or (a_hi.max(0) > hi + 1e-3).any():
+        failures.append("arena geoms outside the arena rectangle")
+    overlap = np.all(r_lo[:, None] < a_hi[None], -1) & np.all(a_lo[None] < r_hi[:, None], -1)
+    if overlap.any():
+        failures.append(f"{int(overlap.any(1).sum())} reference geoms overlap an arena geom (AABB)")
+    if (r_hi.max(0) > ref_hi + 1e-3).any() or (r_lo.min(0) < ref_lo - 1e-3).any():
+        failures.append("reference geoms outside the reference grid rectangle")
+    print("reference grid / arena geoms disjoint:", "OK" if not overlap.any() else "OVERLAP")
+    # ray heights at the spawn / goal points of the tables against the analytic surface of the tile
+    group = np.zeros(6, dtype=np.uint8)
+    group[0] = 1
+    geomid = np.zeros(1, dtype=np.int32)
+    tables = env.command_manager.get_term("acp_goal").tables
+    worst, bad = 0.0, 0
+    for tile_id in range(tables.num_tiles):
+        i, level = divmod(tile_id, NUM_LEVELS)
+        tile, c = arena.tiles[i][level], arena.tile_center(i, level)
+        ids = torch.full((samples,), tile_id, device=tables.device)
+        for pts in (tables.sample_spawn(ids), tables.sample_goal(ids)[0]):
+            for p in pts.cpu().numpy().astype(np.float64):
+                truth = float(surface_height(tile.boxes, (p[:2] - c[:2])[None])[0])
+                d = mujoco.mj_ray(model, data, np.array([p[0], p[1], 20.0]), np.array([0.0, 0.0, -1.0]), group, 1, -1, geomid)
+                hit = 20.0 - d if d >= 0 else -100.0
+                err = abs(hit - truth)
+                worst = max(worst, err)
+                if err > 1e-3:
+                    bad += 1
+                    if bad <= 3:
+                        failures.append(f"{TERRAIN_TYPES[i]}[{level}]: ray at ({p[0]:.2f}, {p[1]:.2f}) hits z {hit:.3f}, arena surface {truth:.3f}")
+    print(f"{tables.num_tiles} tiles x {samples} spawn + {samples} goal points: worst |ray - arena surface| {worst:.2e} m, {bad} points off by > 1 mm")
+    if bad:
+        failures.append(f"{bad} spawn / goal points see a different height than the arena surface")
 
 
 def check_layout(env, failures: list) -> None:
@@ -87,8 +157,10 @@ def check_scanner(env, scanner, failures: list, n: int = 4000) -> None:
                 x, y = c[0] + rng.uniform(-TILE_SIZE[0] / 2, TILE_SIZE[0] / 2), c[1] + rng.uniform(-TILE_SIZE[1] / 2, TILE_SIZE[1] / 2)
                 types.append(i)
             else:
-                tile = rng.integers(29)
-                x, y = -420.0 + 30.0 * tile + rng.uniform(-6, 6), rng.uniform(-6, 6)
+                generator = env.cfg.scene.terrain.terrain_generator
+                n_ref = generator.num_rows * generator.num_cols
+                tile = rng.integers(n_ref)
+                x, y = tile_corner(tile, n_ref, tuple(generator.size)) + np.array(generator.size) / 2 + rng.uniform(-6, 6, 2)
             truth = cast(x, y)
             est = float(scanner.ground_height(torch.tensor([[[x, y]]], dtype=torch.float32, device=scanner.heights.device)))
             errs.append(abs(est - truth) if truth > -50 else 0.0)
@@ -184,7 +256,7 @@ def check_rewards(env, vec, mdp, args, failures: list) -> None:
         a_prev, a_prev2 = reader.last_action(), unwrapped.action_manager.prev_action.clone()
         ep = unwrapped.episode_length_buf.clone()
         xi = make_xi(static, reader.dynamic_context())
-        lp0 = mdp.kin.forward(*S)[0]
+        lp0 = mdp.kin.forward(*S)[2 if mdp.contact_acc_vel else 0]  # link positions, or the link velocities with contact_acc "vel1" (the SM tasks)
         lp_hist = torch.stack((lp0 if lp_prev is None else lp_prev, lp0), 0)
         lp_prev = lp0
         a = args.action_noise * torch.randn(N, 23, device=device)
@@ -198,7 +270,7 @@ def check_rewards(env, vec, mdp, args, failures: list) -> None:
         stumble = goal_mdp.stumbling(unwrapped)
         _, t_hard = mdp.reward_mixed(S1, S[5], f1, phase1, origin1, a_env, a_prev, a_prev2, xi, contact, contact_prev, lp_hist, ep, 1, gt.is_goal,
                                      goal1[:, :3], goal1[:, 3], tile, hard=True, stumbling=stumble)  # fmt: skip
-        # the env evaluates rewards on derived quantities (xpos, xvel) one physics substep stale: step the state back by one
+        # (the plain InstinctRlEnv would evaluate rewards on derived quantities one physics substep stale: the stale-corrected column is kept for that comparison)
         dt_p = unwrapped.physics_dt
         p1, R1, v1, w1, q1, qd1 = S1
         S1_stale = (p1 - dt_p * v1, mm(so3_exp(-dt_p * w1), R1), v1, w1, q1 - dt_p * qd1, qd1)
@@ -215,7 +287,7 @@ def check_rewards(env, vec, mdp, args, failures: list) -> None:
         fall_env = tm.get_term("goal_fall")
         fall_mine = mdp.goal_termination(S1, tile, hard=True) > 0.5
         fall_stale = mdp.goal_termination(S1_stale, tile, hard=True) > 0.5
-        bad = (fall_env != fall_stale) & gt.is_goal
+        bad = (fall_env != fall_mine) & gt.is_goal
         if bad.any() and len(fall_debug) < 6:
             for e in bad.nonzero().flatten().tolist()[:2]:
                 fall_debug.append(f"env {e} {TERRAIN_TYPES[int(gt.terrain_type[e])]}[{int(gt.level[e])}] z {float(S1[0][e, 2]):.3f} env {bool(fall_env[e])} mine {bool(fall_mine[e])} stale {bool(fall_stale[e])}")
@@ -228,18 +300,18 @@ def check_rewards(env, vec, mdp, args, failures: list) -> None:
             unwrapped.reset(env_ids=done_ids)
     cat = lambda xs: torch.cat(xs)  # noqa: E731
     print(f"\n== rewards (hard gates) vs the env, {args.steps} steps; goal-env samples within 0.5 m of the goal: {reached} ==")
-    print(f"{'term':26s} {'weight':>9s} {'mean|env|':>11s} {'mean|gap|':>11s} {'max|gap|':>11s} {'gap/mean|env|':>14s} {'stale-corrected':>16s}")
+    print(f"{'term':26s} {'weight':>9s} {'mean|env|':>11s} {'mean|gap|':>11s} {'max|gap|':>11s} {'gap/mean|env|':>14s} {'(plain env: stale-corrected)':>28s}")
     for n in names:
         g, gs, s = cat(gap[n]), cat(gap_stale[n]), cat(scale[n])
         rel, rel_s = float(g.mean() / s.mean().clamp(min=1e-12)), float(gs.mean() / s.mean().clamp(min=1e-12))
         w = rm.get_term_cfg(n).weight
-        print(f"{n:26s} {w:9.3g} {float(s.mean()):11.3e} {float(g.mean()):11.3e} {float(g.max()):11.3e} {rel:14.3e} {rel_s:16.3e}")
-        # tolerance: the env reads velocities one physics substep stale; the indicator terms flip at their thresholds (e.g. feet moving at ~0.5 m/s)
+        print(f"{n:26s} {w:9.3g} {float(s.mean()):11.3e} {float(g.mean()):11.3e} {float(g.max()):11.3e} {rel:14.3e} {rel_s:28.3e}")
+        # tolerance: the indicator terms flip at their thresholds (e.g. feet moving at ~0.5 m/s)
         tol = 0.25 if n == "slippage" else 0.15 if n in ("ang_vel_xy", "track_base_vel", "joint_torque", "contact_acc") else 0.05  # slippage: rare indicator flips (11 - 19 % between runs)
-        if n in (*GOAL_TERMS, *REF_ONLY_TERMS, "contact_acc", "joint_torque") and min(rel, rel_s) > tol and float(s.mean()) > 1e-6:
-            failures.append(f"reward term {n}: analytic vs env relative gap {min(rel, rel_s):.3f}")
+        if n in (*GOAL_TERMS, *REF_ONLY_TERMS, "contact_acc", "joint_torque") and rel > tol and float(s.mean()) > 1e-6:
+            failures.append(f"reward term {n}: analytic vs env relative gap {rel:.3f}")
     print(f"soft vs hard gates (tau = {mdp.tau}): mean |sum of goal terms diff| {float(cat(gap_soft_hard).mean()):.4f}")
-    print(f"goal fall: {fall_mismatch} mismatches of {fall_count} env terminations (analytic hard, stale-corrected, vs env)")
+    print(f"goal fall: {fall_mismatch} mismatches of {fall_count} env terminations (analytic hard vs env; the AcpRlEnv terminations see fresh kinematics)")
     for line in fall_debug:
         print("   ", line)
     saved = dict(mdp.tau)
@@ -395,20 +467,31 @@ def check_curriculum_wiring(env, vec, failures: list, steps: int = 820) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--task", type=str, default=TASK)
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--action-noise", type=float, default=0.05)
+    parser.add_argument("--motion-folder", type=str, default=None)
     args = parser.parse_args()
+    if args.motion_folder is not None:  # another dataset folder for this process
+        import os
+
+        import instinct_mj.tasks.acp.config.g1.acp_tracking_cfg as acp_g1
+
+        buf = acp_g1.motion_reference_cfg.motion_buffers["TerrainMotion"]
+        buf.path = os.path.expanduser(args.motion_folder)
+        buf.metadata_yaml = os.path.join(buf.path, "metadata.yaml")
     device = "cuda:0"
-    cfg = load_env_cfg(TASK)
+    cfg = load_env_cfg(args.task)
     cfg.scene.num_envs = args.num_envs
     cfg.disable_randomization()
     for actuator in cfg.scene.entities["robot"].articulation.actuators:
         actuator.delay_max_lag = 0
-    env = load_env_cls(TASK)(cfg=cfg, device=device)
+    env = load_env_cls(args.task)(cfg=cfg, device=device)
     vec = InstinctRlVecEnvWrapper(env, policy_group="policy", critic_group="critic")
     obs, _ = vec.reset()
     failures: list[str] = []
+    check_arena_layout(env, failures)
     check_layout(env, failures)
     mdp_cfg = ACPStage3Cfg().to_dict()
     motion, kin, scanner, mdp = build_stage3_mdp(env, 0.05, "~/.cache/instinct_mj/supermimic_heightmaps", device, mdp_cfg)

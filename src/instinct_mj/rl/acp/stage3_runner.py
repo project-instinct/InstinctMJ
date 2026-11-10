@@ -1,7 +1,7 @@
 """SuperMimic training of ACP Stage 3: reference tracking mixed with goal reaching on procedural terrains (paper Fig. 3, Table S6).
 
 ``ACPStage3Runner`` is the Stage 2 runner (``ACPRunner``: collect -> k-step world-model fit -> H-step BPTT policy + GAE critic, the contact
-planner trained in parallel on hindsight labels) for the mixed env ``Instinct-ACP-Stage3-G1-v0``. What changes with the goal-reaching envs:
+planner trained in parallel on hindsight labels) for the mixed env ``Instinct-ACP-Stage3-G1-v1``. What changes with the goal-reaching envs:
 
 * Two critics routed per env type: the reference critic Vm (features of ``ACPMDP.critic_features``) and the goal-reaching critic Vfs
   (``ACPStage3MDP.goal_critic_features``: goal command, distance, vertical offset, elapsed time, planned contacts, ...), Adam with the fixed
@@ -38,8 +38,8 @@ from instinct_mj.tasks.acp.mdp import goal as goal_mdp
 from .buffer import ACPReplayBuffer
 from .mdp import ACT_DIM, INV_DIM, ODO_HIST, SCAN_NX, SCAN_NY, XI_DIM, targets_to_world
 from .motion import NUM_CONTACT, PELVIS
-from .rays import ClippedRunningNorm
-from .runner import ACPRunner
+from .rays import ScanFloorRunningNorm
+from .runner import TARGETS_SLICE, ACPRunner
 from .stage2 import PartitionedReplay
 from .stage3_mdp import GOAL_TERMS, build_stage3_mdp
 
@@ -68,14 +68,14 @@ class StumbleHead(nn.Module):
     """P(link f stumbles during the control step) for the nine contact links, the learned counterpart of the stumbling penalty (Table 3), whose
     force condition (F_xy > 1.1 F_z + 1 N) the world model cannot evaluate. Input: the invariant state s_t and the action a_t of the step, the
     17 x 11 height scan of the true pelvis pose at s_t (whether the foot lands on a ledge or a rung), the normalized DR context xi (action delay,
-    friction, ...) and the contact of the nine links at s_t (the contact history). MLP 256-128 on a ``ClippedRunningNorm`` input."""
+    friction, ...) and the contact of the nine links at s_t (the contact history). MLP 256-128 on a ``ScanFloorRunningNorm`` input."""
 
     SCAN = slice(INV_DIM + ACT_DIM, INV_DIM + ACT_DIM + SCAN_NY * SCAN_NX)
 
     def __init__(self):
         super().__init__()
         self.in_dim = INV_DIM + ACT_DIM + SCAN_NY * SCAN_NX + XI_DIM + NUM_CONTACT
-        self.norm = ClippedRunningNorm(self.in_dim, self.SCAN)
+        self.norm = ScanFloorRunningNorm(self.in_dim, self.SCAN)
         self.net = mlp(self.in_dim, [256, 128], NUM_CONTACT)
 
     @staticmethod
@@ -109,11 +109,13 @@ class ACPStage3Buffer(ACPReplayBuffer):
 class ACPStage3Runner(ACPRunner):
     """Trainer of the mixed Stage 3 env; see the module docstring. Public API as :class:`ACPRunner`."""
 
+    needs_contact = True  # the measured contact of the step is the next step's ``contact_prev`` (slippage, StumbleHead inputs)
+
     def __init__(self, env, train_cfg: dict, log_dir: str | None = None, device: str = "cuda:0"):
         super().__init__(env, train_cfg, log_dir, device)
         if self.cfg["contact_source"] != "planner" or not self.cfg["train_planner"]:
             raise ValueError("Stage 3 uses the planner throughout (contact_source='planner') and keeps training it (train_planner=True).")
-        if self.cfg["imagine_past_clip_end"] or self.cfg["start_sampling"] != "uniform" or self.cfg["wm_balance_frac"] > 0 or self.cfg["start_balance_frac"] > 0 or self.cfg["imagine_action_noise"] > 0 or self.cfg["bptt_stopgrad_terms"] or self.cfg["imagine_ref_replay_eps"] > 0 or self.cfg["real_ref_inject_eps"] > 0 or self.cfg["imagine_link_hazard_eps"] > 0 or self.cfg["clip_sampling"] != "uniform" or self.cfg["reset_sampling"] != "csi" or self.cfg["clip_end_bootstrap"] or self.cfg["csi_strict_link_eps"] > 0 or self.cfg["abpt_one_step_weight"] > 0 or self.cfg["geo_contact"]:
+        if self.cfg["imagine_past_clip_end"] or self.cfg["start_sampling"] != "uniform" or self.cfg["wm_balance_frac"] > 0 or self.cfg["start_balance_frac"] > 0 or self.cfg["imagine_action_noise"] > 0 or self.cfg["bptt_stopgrad_terms"] or self.cfg["imagine_ref_replay_eps"] > 0 or self.cfg["real_ref_inject_eps"] > 0 or self.cfg["imagine_link_hazard_eps"] > 0 or self.cfg["clip_end_bootstrap"] or self.cfg["abpt_one_step_weight"] > 0 or self.cfg["geo_contact"]:
             raise ValueError("imagine_past_clip_end / start_sampling are Track (Stage 1) options: the Stage 3 returns do not implement the masks.")
         if self.cfg["no_critic"]:
             raise ValueError("Stage 3 bootstraps with the two critics (no_critic=False).")
@@ -123,7 +125,7 @@ class ACPStage3Runner(ACPRunner):
         """``ACPRunner.setup_training`` (with the Stage 3 MDP, buffer and replay of the hooks below) plus the goal-reaching critic Vfs."""
         c, device = self.cfg, self.device
         super().setup_training()
-        self.critic_goal = Critic(self.mdp.goal_critic_dim()).to(device)
+        self.critic_goal = Critic(self.mdp.goal_critic_dim(), hidden=[int(h) for h in c["critic_hidden"].split(",")]).to(device)
         self.opt_vg = torch.optim.Adam(self.critic_goal.parameters(), lr=c["vfs_lr"])  # fixed learning rate (Table S6), not scheduled in learn()
         self.stumble_head = StumbleHead().to(device)
         self.opt_stumble = torch.optim.Adam(self.stumble_head.parameters(), lr=c["stumble_lr"])
@@ -288,19 +290,21 @@ class ACPStage3Runner(ACPRunner):
             no_ref = (torch.zeros(B, NUM_CONTACT, 3, device=self.device), torch.zeros(B, NUM_CONTACT, dtype=torch.bool, device=self.device))
             use_all = torch.ones(B, dtype=torch.bool, device=self.device)
         Ss, As, Aps, Aps2, Ls, Pw, Pb, Hard = [], [], [], [], [], [], [], []
+        wm_contact0 = s["wm_contact0"] if self.wm_contact_feedback else None
 
-        def observe(S, hist, push):
-            bp, bR, _, _ = mdp.base_of(kin.forward(*S))
+        def observe(fk, hist, push):
+            bp, bR, _, _ = mdp.base_of(fk)
             if push:
                 hist = mdp.push_pose(hist, bp, bR)
             ep_, eyaw = mdp.estimated_pose(hist, odo_delay, odo_drift)
             eR = mdp.yaw_rotation(eyaw)
             return mdp.scan(ep_, eR), mdp.goal_command(ep_, eR, gpos, gyaw), hist
 
+        fk = self.fk_all(S)  # forward kinematics of the current state, computed once (the next one comes out of ``step_wm``)
         for t in range(HZ + 1):
             if t > 0:
-                o_hist = self.push(o_hist, S, a_prev, xi)
-            scan, goal, pelvis_hist = observe(S, pelvis_hist, t > 0)
+                o_hist = self.push(o_hist, S, fk, a_prev, xi)
+            scan, goal, pelvis_hist = observe(fk, pelvis_hist, t > 0)
             goal_noisy = mdp.noisy_goal(goal)  # one noise sample per imagined state: the observation and the planner see the same goal
             ptgt, pvalid, _ = self._plan(o_hist, scan, goal_noisy, 1.0)
             Pw.append((targets_to_world(*mdp.estimated_pose(pelvis_hist, odo_delay, odo_drift), ptgt), pvalid)), Pb.append((ptgt, pvalid))
@@ -310,11 +314,15 @@ class ACPStage3Runner(ACPRunner):
             obs = self.assemble(o_hist, scan, *no_ref, goal_noisy, (use_all, ptgt))
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=c["policy_autocast"]):
                 a = self.ac.actor(self.pol_norm(obs)).float()
-            step_args = (S, a, a_prev, xi_n)
+            step_args = (S, fk, a, a_prev, xi_n)
+            if self.wm_contact_spec:
+                step_args += (obs[:, TARGETS_SLICE].detach() if self.wm_ref_contacts else None, wm_contact0)
             if c["checkpoint_imagination"] and torch.is_grad_enabled():
-                a, S, logits, hard = torch.utils.checkpoint.checkpoint(self.step_wm, *step_args, use_reentrant=False)
+                a, S, fk, logits, hard = torch.utils.checkpoint.checkpoint(self.step_wm, *step_args, use_reentrant=False)
             else:
-                a, S, logits, hard = self.step_wm(*step_args)
+                a, S, fk, logits, hard = self.step_wm(*step_args)
+            if self.wm_contact_feedback:
+                wm_contact0 = torch.sigmoid(logits)
             a_prev2, a_prev = a_prev, a
             Ss.append(S), As.append(a), Ls.append(logits), Hard.append(hard.detach())
         return {"S0": unflatten_state(s["s"]), "S": S, "Ss": Ss, "As": As, "Aps": Aps, "Aps2": Aps2, "Ls": Ls, "Pw": Pw, "Pb": Pb, "Hard": Hard,
@@ -343,7 +351,7 @@ class ACPStage3Runner(ACPRunner):
     def _gae_targets(self, critic, X: torch.Tensor, rews: torch.Tensor, dones: torch.Tensor) -> torch.Tensor:
         c = self.cfg
         with torch.no_grad():
-            V = critic(X)
+            V = self.value_bound(critic(X))
             R = V[-1]
             targets = []
             for t in range(self.horizon - 1, -1, -1):
@@ -365,16 +373,18 @@ class ACPStage3Runner(ACPRunner):
         r, d, terms = self.reward_term(S_all, qd_start, flat(Fs), rep(phase), rep(origin), flat(As), flat(Aps), flat(Aps2), rep(xi), flat(Ls),
                                        im["lp_hist"], im["ep0"], planned, eta_rew, HZ)  # fmt: skip
         G1 = torch.stack(Gs[1:]).flatten(0, 1)
+        X1 = self.critic_input(S_all, flat(Fs), rep(phase), rep(origin), rep(xi_n), G1[:, :3], G1[:, 3]) if self.head_features_needed() else None  # shared by both heads
+        d, term_stats = self.apply_term_source(d, X1)  # reference starts only; the goal starts keep the analytic fall
         p_fail_mean = torch.zeros((), device=dev)
         if c["fail_head"] and self.it >= self.fail_head_start_it + c["fail_head_warmup_iters"]:
-            p_fail = torch.sigmoid(self.fail_head(self.critic_input(S_all, flat(Fs), rep(phase), rep(origin), rep(xi_n), G1[:, :3], G1[:, 3]))).clamp(max=c["fail_clip"])
+            p_fail = torch.sigmoid(self.fail_head(X1)).clamp(max=c["fail_clip"])
             d = 1 - (1 - d) * (1 - p_fail)
             p_fail_mean = p_fail.detach().mean()
         r, d = r.view(HZ, B), d.view(HZ, B)
         alive = torch.cumprod(1 - d, 0)
         c_t = torch.cat((torch.ones(1, B, device=dev), alive[:-1]), 0)
         disc = c["gamma"] ** torch.arange(HZ, device=dev, dtype=torch.float32).unsqueeze(-1)
-        J = (disc * c_t * r).sum(0) + (c["gamma"] ** HZ) * alive[-1] * self.critic(self.critic_input(S, f, phase, origin, xi_n, Gs[-1][:, :3], Gs[-1][:, 3]))
+        J = (disc * c_t * r).sum(0) + (c["gamma"] ** HZ) * alive[-1] * self.value_bound(self.critic(self.critic_input(S, f, phase, origin, xi_n, Gs[-1][:, :3], Gs[-1][:, 3])))
         with torch.no_grad():
             S_c = tuple(torch.cat((S0[i].unsqueeze(0), torch.stack([St[i].detach() for St in Ss])), 0).flatten(0, 1) for i in range(6))
             f_c = torch.cat((f0.unsqueeze(0), torch.stack(Fs)), 0).flatten()
@@ -383,6 +393,7 @@ class ACPStage3Runner(ACPRunner):
             X = self.critic_input(S_c, f_c, rep1(phase), rep1(origin), rep1(xi_n), Gc[:, :3], Gc[:, 3]).view(HZ + 1, B, -1)
         terms = {k: v.detach().view(HZ, B).mean() for k, v in terms.items()}
         terms["p_fail_mean"] = p_fail_mean
+        terms.update(term_stats)
         return {"J": J, "X": X, "rews": r.detach(), "dones": d.detach(), "survival": alive[-1].mean().detach(), "terms": terms,
                 "reward": (c_t * r).detach().sum(0).mean() / HZ / mdp.dt, "S_all": S_all, "hard": torch.stack(im["Hard"]).mean()}  # fmt: skip
 
@@ -416,7 +427,7 @@ class ACPStage3Runner(ACPRunner):
             return mdp.goal_critic_features(Sx, gp, gy, t_norm, Pb[0], Pb[1], xin)
 
         X_T = features(S, im["gpos"], im["gyaw"], t_steps[-1], im["Pb"][-1], im["xi_n"])
-        J = (disc * c_t * r).sum(0) + (c["gamma"] ** HZ) * alive[-1] * self.critic_goal(X_T)
+        J = (disc * c_t * r).sum(0) + (c["gamma"] ** HZ) * alive[-1] * self.value_bound(self.critic_goal(X_T))
         with torch.no_grad():
             S_c = tuple(torch.cat((S0[i].unsqueeze(0), torch.stack([St[i].detach() for St in Ss])), 0).flatten(0, 1) for i in range(6))
             Pb_t = torch.stack([p[0] for p in im["Pb"]]).flatten(0, 1), torch.stack([p[1] for p in im["Pb"]]).flatten(0, 1)
@@ -443,7 +454,7 @@ class ACPStage3Runner(ACPRunner):
         B_m = c["pi_batch"] - B_g
         s_m, h_m = self.sample_valid_starts(B_m)
         s_g, h_g = self.sample_goal_starts(B_g)
-        frozen = (self.wm, self.critic, self.critic_goal, self.fail_head, self.stumble_head)
+        frozen = (self.wm, self.critic, self.critic_goal, self.fail_head, self.stumble_head, *([self.term_head] if self.term_head is not None else []))
         for m_ in frozen:
             for p_ in m_.parameters():
                 p_.requires_grad_(False)

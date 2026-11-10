@@ -346,9 +346,11 @@
                           <geom pos="0.03 0.0 0" quat="0.7071068 0 0.7071068 0" type="mesh"
                             rgba="0.2 0.2 0.2 1" mesh="left_sphere_hand" />
                           <!-- <geom type="sphere" size="0.05" pos="0.07 0 0" rgba="0.2 0.2 0.2 1" contype="0" conaffinity="0"/> -->
-                          <!-- <geom pos="0.0415 0.003 0" quat="1 0 0 0" type="mesh" contype="0"
+                          <!-- visual palm/fingers only (contype 0, density 0): the ACP asset welds the wrist, so
+                               without this the rendered arm just stops at the wrist link -->
+                          <geom pos="0.0415 0.003 0" quat="1 0 0 0" type="mesh" contype="0"
                             conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1"
-                            mesh="left_rubber_hand" /> -->
+                            mesh="left_rubber_hand" />
                         </body>
                       </body>
                     </body>
@@ -414,9 +416,9 @@
                           <geom pos="0.03 0.0 0" quat="0.7071068 0 0.7071068 0" type="mesh"
                             rgba="0.2 0.2 0.2 1" mesh="right_sphere_hand" />
                           <!-- <geom type="sphere" size="0.05" pos="0.07 0 0" rgba="0.2 0.2 0.2 1" contype="0" conaffinity="0"/> -->
-                          <!-- <geom pos="0.0415 -0.003 0" quat="1 0 0 0" type="mesh" contype="0"
+                          <geom pos="0.0415 -0.003 0" quat="1 0 0 0" type="mesh" contype="0"
                             conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1"
-                            mesh="right_rubber_hand" /> -->
+                            mesh="right_rubber_hand" />
                         </body>
                       </body>
                     </body>

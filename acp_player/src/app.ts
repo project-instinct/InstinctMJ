@@ -52,6 +52,12 @@ interface Config {
 
 interface ElementIds {
   panel: HTMLElement;
+  'panel-toggle': HTMLButtonElement;
+  scrim: HTMLElement;
+  'm-prev': HTMLButtonElement;
+  'm-next': HTMLButtonElement;
+  'm-clip': HTMLElement;
+  'm-frame': HTMLElement;
   dataset: HTMLElement;
   group: HTMLElement;
   clip: HTMLElement;
@@ -111,6 +117,9 @@ interface ElementIds {
 const $ = <K extends keyof ElementIds>(id: K): ElementIds[K] => document.getElementById(id) as ElementIds[K];
 const clamp = (value: number, low: number, high: number): number => Math.min(high, Math.max(low, value));
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+// 窄屏（手机 / 平板竖屏）把控制栏收进底部抽屉；桌面布局不受影响。
+const COMPACT_QUERY = '(max-width: 820px), (pointer: coarse)';
+const compact = (): boolean => window.matchMedia(COMPACT_QUERY).matches;
 
 // 界面用中文；服务器返回的 BODY_LABELS 是英文，这里做一层映射。
 const BODY_ZH = {
@@ -403,52 +412,134 @@ new ResizeObserver(resize).observe(viewport);
 
 // --- bottom dock: drag the splitter to trade viewport height for taller rows
 const TL_MIN_HEIGHT = 96;
+const TL_COMPACT_MIN_HEIGHT = 116;
 const TL_DEFAULT_HEIGHT = 210;
 const TL_HEIGHT_KEY = 'acp.timelineHeight';
+const TL_HEIGHT_KEY_COMPACT = 'acp.timelineHeightMobile';
+const tlHeightKey = (): string => (compact() ? TL_HEIGHT_KEY_COMPACT : TL_HEIGHT_KEY);
+const tlMinHeight = (): number => {
+  if (!compact()) return TL_MIN_HEIGHT;
+  // 横屏手机把时间轴再压矮一点，给 3D 视口留高度。
+  return window.innerHeight < 520 ? 88 : TL_COMPACT_MIN_HEIGHT;
+};
+
+// Phones get a shorter default so the 3D view keeps most of the screen.
+function defaultTimelineHeight(): number {
+  if (!compact()) return TL_DEFAULT_HEIGHT;
+  if (window.innerHeight < 520) return Math.round(clamp(window.innerHeight * 0.27, 96, 140));
+  return Math.round(clamp(window.innerHeight * 0.2, 132, 200));
+}
 
 function timelineHeightLimit(): number {
-  return Math.max(TL_MIN_HEIGHT + 24, $('stage').clientHeight - $('editbar').offsetHeight - 120);
+  const bottom = compact() ? 160 : 120;
+  return Math.max(tlMinHeight() + 24, $('stage').clientHeight - $('editbar').offsetHeight - bottom);
 }
 
 function applyTimelineHeight(value: number, persist = true): void {
-  const height = Math.round(clamp(value, TL_MIN_HEIGHT, timelineHeightLimit()));
+  const height = Math.round(clamp(value, tlMinHeight(), timelineHeightLimit()));
   state.timelineHeight = height;
   timelineEl.style.height = `${height}px`;
   timelineEl.style.flex = `0 0 ${height}px`;
   if (persist) {
-    try { localStorage.setItem(TL_HEIGHT_KEY, String(height)); } catch (_) { /* private mode */ }
+    try { localStorage.setItem(tlHeightKey(), String(height)); } catch (_) { /* private mode */ }
   }
   resize();
 }
 
 function restoreTimelineHeight(): void {
   let stored = NaN;
-  try { stored = Number(localStorage.getItem(TL_HEIGHT_KEY)); } catch (_) { /* ignore */ }
-  applyTimelineHeight(Number.isFinite(stored) && stored > 0 ? stored : TL_DEFAULT_HEIGHT, false);
+  try { stored = Number(localStorage.getItem(tlHeightKey())); } catch (_) { /* ignore */ }
+  applyTimelineHeight(Number.isFinite(stored) && stored > 0 ? stored : defaultTimelineHeight(), false);
 }
 
-// Mouse orbit / pan / zoom (world +Z up).
-let drag = null;
+// --- mobile control drawer (hidden on desktop by CSS)
+const panelEl = $('panel');
+const panelToggle = $('panel-toggle');
+const scrimEl = $('scrim');
+
+function setPanel(open: boolean): void {
+  panelEl.classList.toggle('open', open);
+  panelToggle.classList.toggle('open', open);
+  panelToggle.setAttribute('aria-expanded', String(open));
+  panelToggle.textContent = open ? '✕ 收起' : '☰ 控制';
+  scrimEl.hidden = !open;
+}
+
+function closePanel(): void {
+  if (panelEl.classList.contains('open')) setPanel(false);
+}
+
+// Mouse orbit / pan / zoom (world +Z up). Touch: one finger orbits, two
+// fingers pinch to zoom while the midpoint drag pans.
+let drag: { x: number; y: number; pan: boolean } | null = null;
+const pointers = new Map<number, { x: number; y: number }>();
+let pinch: { distance: number; cx: number; cy: number } | null = null;
+
+function panCamera(dx: number, dy: number): void {
+  const scale = 2 * controls.radius * Math.tan((camera.fov * Math.PI) / 360) / Math.max(canvas.clientHeight, 1);
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+  controls.target.addScaledVector(right, -dx * scale).addScaledVector(up, dy * scale);
+}
+
+function pinchState(): { distance: number; cx: number; cy: number } {
+  const [a, b] = [...pointers.values()];
+  return {
+    distance: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+    cx: 0.5 * (a.x + b.x),
+    cy: 0.5 * (a.y + b.y),
+  };
+}
+
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('pointerdown', (event) => {
   canvas.setPointerCapture(event.pointerId);
-  drag = { x: event.clientX, y: event.clientY, pan: event.button !== 0 || event.shiftKey };
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (pointers.size === 1) {
+    drag = { x: event.clientX, y: event.clientY, pan: event.button !== 0 || event.shiftKey };
+    pinch = null;
+  } else if (pointers.size === 2) {
+    drag = null;
+    pinch = pinchState();
+  }
 });
-canvas.addEventListener('pointerup', (event) => {
-  drag = null;
+
+function releasePointer(event: PointerEvent): void {
+  pointers.delete(event.pointerId);
   if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-});
+  if (pointers.size === 0) {
+    drag = null;
+    pinch = null;
+  } else if (pointers.size === 1 && pinch) {
+    // Dropping one finger of a pinch: continue as a pan with the remaining one.
+    const [rest] = [...pointers.values()];
+    drag = { x: rest.x, y: rest.y, pan: true };
+    pinch = null;
+  }
+}
+
+canvas.addEventListener('pointerup', releasePointer);
+canvas.addEventListener('pointercancel', releasePointer);
 canvas.addEventListener('pointermove', (event) => {
+  const tracked = pointers.get(event.pointerId);
+  if (!tracked) return;
+  const dx = event.clientX - tracked.x;
+  const dy = event.clientY - tracked.y;
+  tracked.x = event.clientX;
+  tracked.y = event.clientY;
+  if (pointers.size >= 2) {
+    const next = pinchState();
+    if (pinch) {
+      controls.radius = clamp(controls.radius * (pinch.distance / next.distance), 0.25, 200);
+      panCamera(next.cx - pinch.cx, next.cy - pinch.cy);
+    }
+    pinch = next;
+    applyCamera();
+    return;
+  }
   if (!drag) return;
-  const dx = event.clientX - drag.x;
-  const dy = event.clientY - drag.y;
-  drag.x = event.clientX;
-  drag.y = event.clientY;
   if (drag.pan) {
-    const scale = 2 * controls.radius * Math.tan((camera.fov * Math.PI) / 360) / Math.max(canvas.clientHeight, 1);
-    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
-    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
-    controls.target.addScaledVector(right, -dx * scale).addScaledVector(up, dy * scale);
+    panCamera(dx, dy);
   } else {
     controls.azimuth -= dx * 0.0055;
     controls.elevation = clamp(controls.elevation + dy * 0.0055, -1.45, 1.45);
@@ -897,6 +988,7 @@ function updateScene(force) {
   if (force || now - state.lastText >= 100) {
     $('status').innerHTML = `<span class="mono">${seconds.toFixed(2)} / ${((frames - 1) / header.fps).toFixed(2)} s</span>`
       + ` · 第 <span class="mono">${frame}</span> / ${frames - 1} 帧`;
+    $('m-frame').textContent = `${seconds.toFixed(2)}s · ${frame}`;
     state.lastText = now;
   }
   if (force || now - state.lastCursor >= 50) { drawCursor(); state.lastCursor = now; }
@@ -919,7 +1011,12 @@ function timelineGeometry() {
   const height = timelineEl.clientHeight || 1;
   // `top` leaves a ruler band above the rows: that strip is the playhead's
   // grab area, so scrubbing stays possible while edit mode owns the rows.
-  const left = 98, right = 14, top = 26, bottom = 32;
+  // On phones squeeze the label gutter so the plot keeps most of the width.
+  const narrow = width < 560;
+  const left = narrow ? Math.min(72, Math.round(width * 0.2)) : 98;
+  const right = narrow ? 10 : 14;
+  const top = narrow ? 22 : 26;
+  const bottom = narrow ? 26 : 32;
   return { width, height, left, right, top, bottom, plotW: Math.max(width - left - right, 1), plotH: Math.max(height - top - bottom, 1) };
 }
 
@@ -2010,8 +2107,7 @@ function applyCuration() {
   showReview();
 }
 
-function showReview() {
-  const name = state.clipName;
+function showReview() {  const name = state.clipName;
   const entry = name ? state.entries.get(name) : null;
   if (!entry) { $('review').innerHTML = ''; return; }
   const record = state.curation[name] || {};
@@ -2022,6 +2118,23 @@ function showReview() {
     const draft = state.noteDrafts.get(`${state.dataset}/${name}`);
     $('note').value = record.note !== undefined ? record.note : (draft || '');
   }
+}
+
+// Deep link: /?group=vault__vault_gen&clip=vault/vault_gen__206_d0035_s31.npz opens the viewer on
+// that group / clip, so a link can point at one batch of references instead of "pick it in the UI".
+function readDeepLink(): { group: string; clip: string } {
+  const params = new URLSearchParams(location.search);
+  return { group: params.get('group') || '', clip: params.get('clip') || '' };
+}
+
+function writeDeepLink(): void {
+  const params = new URLSearchParams(location.search);
+  if (state.group) params.set('group', state.group);
+  else params.delete('group');
+  if (state.clipName) params.set('clip', state.clipName);
+  else params.delete('clip');
+  const query = params.toString();
+  history.replaceState(null, '', query ? `${location.pathname}?${query}` : location.pathname);
 }
 
 async function switchDataset(name: string) {
@@ -2039,6 +2152,8 @@ async function switchDataset(name: string) {
   state.clip = null;
   $('clip-name').textContent = '—';
   $('clip-group').textContent = '—';
+  $('m-clip').textContent = '—';
+  $('m-frame').textContent = '';
   clearOverlays();
   drawTimeline();
   const dataset = state.config.datasets.find((item) => item.name === name);
@@ -2166,6 +2281,8 @@ async function loadClip(name: string) {
   resetTimelineView();
   $('clip-name').textContent = name;
   $('clip-group').textContent = state.entries.get(name)?.group ?? '';
+  $('m-clip').textContent = name;
+  $('m-clip').title = name;
   state.frame = 0;
   state.lastFrame = -1;
   state.lastSeconds = -1;
@@ -2375,8 +2492,20 @@ function wire() {
     state.dockDrag = null;
     dockHandle.classList.remove('dragging');
   });
-  dockHandle.addEventListener('dblclick', () => applyTimelineHeight(TL_DEFAULT_HEIGHT));
+  dockHandle.addEventListener('dblclick', () => applyTimelineHeight(defaultTimelineHeight()));
   window.addEventListener('resize', () => applyTimelineHeight(state.timelineHeight, false));
+  // 手机：底部抽屉 + 画布左上角的片段切换条。
+  panelToggle.addEventListener('click', () => setPanel(!panelEl.classList.contains('open')));
+  scrimEl.addEventListener('click', () => setPanel(false));
+  $('m-prev').addEventListener('click', () => stepClip(-1));
+  $('m-next').addEventListener('click', () => stepClip(1));
+  const compactMedia = window.matchMedia(COMPACT_QUERY);
+  const onCompactChange = (): void => {
+    closePanel();
+    applyTimelineHeight(defaultTimelineHeight(), false);
+  };
+  if (compactMedia.addEventListener) compactMedia.addEventListener('change', onCompactChange);
+  else compactMedia.addListener(onCompactChange);
   state.selects = {
     dataset: new Select($('dataset'), { search: true, placeholder: '选择数据集' }),
     group: new Select($('group'), { search: true, placeholder: '全部分组', emptyText: '没有分组' }),
@@ -2387,6 +2516,7 @@ function wire() {
   state.selects.group.onChange = (value) => {
     state.group = value;
     applyFilter(true);
+    writeDeepLink();
   };
   $('filter').addEventListener('input', () => applyFilter(true));
   // Esc leaves the search box: the timeline gets the keyboard back.
@@ -2396,7 +2526,12 @@ function wire() {
     (event.target as HTMLInputElement).blur();
     timelineEl.focus({ preventScroll: true });
   });
-  state.selects.clip.onChange = (value) => { if (value) loadClip(value); };
+  state.selects.clip.onChange = (value) => { if (value) {
+    loadClip(value);
+    writeDeepLink();
+    // 手机上选完片段就把抽屉收起来，立刻看到动作。
+    if (compact()) closePanel();
+  } };
   $('copy-clip').addEventListener('click', () => {
     if (!state.clipName) return;
     const area = document.createElement('textarea');
@@ -2545,6 +2680,21 @@ async function boot() {
     ? config.default : (config.datasets[0] || {}).name;
   state.selects.dataset.value = defaultName;
   await switchDataset(defaultName);
+  const deep = readDeepLink();
+  const groupExists = deep.group && [...state.entries.values()].some((entry) => entry.group === deep.group);
+  if (groupExists) {
+    state.group = deep.group;
+    refreshGroups();
+    applyFilter(false); // pick the group's clips without auto-loading; the load below is explicit
+  }
+  if (deep.clip && state.clipOptions.includes(deep.clip)) {
+    state.selects.clip.value = deep.clip;
+    await loadClip(deep.clip);
+  } else if (groupExists && state.clipOptions.length) {
+    state.selects.clip.value = state.clipOptions[0];
+    await loadClip(state.clipOptions[0]);
+  }
+  writeDeepLink();
   resize();
   requestAnimationFrame(animate);
   setInterval(() => {

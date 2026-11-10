@@ -22,7 +22,7 @@ from instinct_mj.rl import InstinctRlVecEnvWrapper
 from instinct_mj.rl.acp.sim import build_mdp
 from instinct_mj.tasks.registry import load_env_cfg, load_env_cls
 
-TASK = "Instinct-ACP-Track-G1-v0"
+TASK = "Instinct-ACP-Track-G1-v1"
 S45 = math.sqrt(0.5)
 
 

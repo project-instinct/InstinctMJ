@@ -135,7 +135,7 @@ def terrain_penetration_depth(
 ) -> torch.Tensor:
     """Deepest robot-vs-terrain penetration [m] of every env at its CURRENT (just written) state, shape ``(num_envs,)`` (0 = no penetrating contact).
 
-    Runs the (CUDA-graph captured) ``sim.forward()`` on the existing data (kinematics, collision detection, constraints; no extra GPU memory) and reduces the contacts of the robot
+    Runs kinematics + collision detection (a CUDA graph captured once on the sim's data; ``sim.forward()`` without CUDA graphs) on the existing data and reduces the contacts of the robot
     geoms against the terrain geoms (robot self-contacts and contacts with other entities are ignored) to the per-world minimum of
     ``contact.dist``. ``contact.dist`` is the signed distance of a contact (negative = penetration); with a zero margin only penetrating
     contacts are generated. Contacts beyond the contact buffer (``nacon`` > ``naconmax``) are not seen. Note that the derived
@@ -155,7 +155,21 @@ def terrain_penetration_depth(
         env._penetration_geom_masks = cache
     _, robot, terrain = cache
 
-    sim.forward()  # the captured forward graph of the sim (no new Data, no new graph, no scratch memory: an eager ``mjwarp.collision`` allocates ~4 MB per env of scratch)
+    # kinematics + collision detection only (the contacts are all this needs; 7x cheaper than the full forward with the constraint solver), as a CUDA graph captured once
+    # on the sim's data (an eager ``mjwarp.collision`` allocates ~4 MB per env of scratch); recaptured when the sim recaptures its graphs (replaced arrays).
+    if sim.use_cuda_graph:
+        graph = getattr(env, "_penetration_graph", None)
+        if graph is None or graph[0] is not sim.forward_graph:
+            import mujoco_warp as mjwarp
+
+            with wp.ScopedDevice(sim.wp_device), wp.ScopedCapture() as capture:
+                mjwarp.kinematics(sim.wp_model, sim.wp_data)
+                mjwarp.collision(sim.wp_model, sim.wp_data)
+            graph = env._penetration_graph = (sim.forward_graph, capture.graph)
+        with wp.ScopedDevice(sim.wp_device):
+            wp.capture_launch(graph[1])
+    else:
+        sim.forward()
     contact = sim.wp_data.contact
     dist, world = wp.to_torch(contact.dist), wp.to_torch(contact.worldid).long()
     geom = wp.to_torch(contact.geom).long()  # (naconmax, 2)
@@ -167,6 +181,20 @@ def terrain_penetration_depth(
     out = torch.zeros(env.num_envs, dtype=dist.dtype, device=dist.device)
     out.scatter_reduce_(0, world.clamp(0, env.num_envs - 1), depth, reduce="amax")
     return out
+
+
+def reference_reset_state(motion_ref, env_ids, position_offset, dof_vel_ratio, base_lin_vel_ratio, base_ang_vel_ratio):
+    """The noise-free reset state of ``env_ids``: (base pos, base quat, base lin vel, base ang vel, joint pos, joint vel) of the motion reference start frame."""
+    state = motion_ref.get_init_reference_state(env_ids)
+    base_pos_w = state.base_pos_w + torch.tensor(position_offset, device=state.base_pos_w.device).unsqueeze(0)
+    return (
+        base_pos_w,
+        state.base_quat_w,
+        state.base_lin_vel_w * base_lin_vel_ratio,
+        state.base_ang_vel_w * base_ang_vel_ratio,
+        state.joint_pos,
+        state.joint_vel * dof_vel_ratio,
+    )
 
 
 def reset_robot_state_by_reference(
@@ -223,49 +251,46 @@ def reset_robot_state_by_reference(
 
     # reset the robot state based on motion reference data
     data: MotionReferenceData = motion_ref.data  # triggering the motion reference to update the data.
-    motion_ref_init_state = motion_ref.get_init_reference_state(env_ids)
-
-    # reset the robot state
-    base_pos_w = motion_ref_init_state.base_pos_w + torch.tensor(
-        position_offset, device=motion_ref_init_state.base_pos_w.device
-    ).unsqueeze(0)
-    base_quat_w = motion_ref_init_state.base_quat_w
-    base_lin_vel_w = motion_ref_init_state.base_lin_vel_w * base_lin_vel_ratio
-    base_ang_vel_w = motion_ref_init_state.base_ang_vel_w * base_ang_vel_ratio
-    joint_pos = motion_ref_init_state.joint_pos
-    joint_vel = motion_ref_init_state.joint_vel * dof_vel_ratio
-    ref = (base_pos_w, base_quat_w, base_lin_vel_w, base_ang_vel_w, joint_pos, joint_vel)
+    ref = reference_reset_state(motion_ref, env_ids, position_offset, dof_vel_ratio, base_lin_vel_ratio, base_ang_vel_ratio)
     noise = (randomize_pose_range, randomize_velocity_range, randomize_joint_pos_range, clamp_joint_pos_to_limits)
 
     _write_reference_reset(asset, env_ids, *ref, *noise)
+    depth = None  # the penetration depth of every env at the state written last (set by the rejection)
     if max_penetration is not None:
-        _reject_penetrating_noise(env, asset, asset_cfg, terrain_name, env_ids, ref, noise, max_penetration, max_resample, clamp_joint_pos_to_limits)
+        depth = _reject_penetrating_noise(env, asset, asset_cfg, terrain_name, env_ids, ref, noise, max_penetration, max_resample, clamp_joint_pos_to_limits)
     if lift_out_of_terrain and getattr(env, "common_step_counter", 0) > 0:
-        depth = terrain_penetration_depth(env, asset_cfg, terrain_name)[env_ids]  # (runs sim.forward(): xpos below is the written state)
+        if depth is None:
+            depth = terrain_penetration_depth(env, asset_cfg, terrain_name)  # (runs sim.forward(): xpos below is the written state)
+        depth = depth[env_ids]
         pose = asset.data.root_link_pose_w[env_ids].clone()
         pose[:, 2] += depth
         asset.write_root_link_pose_to_sim(pose, env_ids=env_ids)
 
 
-def _reject_penetrating_noise(env, asset, asset_cfg, terrain_name, env_ids, ref, noise, max_penetration, max_resample, clamp_joint_pos_to_limits) -> None:
-    """The ``max_penetration`` rejection of ``reset_robot_state_by_reference``."""
+def _reject_penetrating_noise(env, asset, asset_cfg, terrain_name, env_ids, ref, noise, max_penetration, max_resample, clamp_joint_pos_to_limits) -> torch.Tensor:
+    """The ``max_penetration`` rejection of ``reset_robot_state_by_reference``. Returns the penetration depth ``(num_envs,)`` of the state written last: every step of the
+    rejection ends with "write, then measure", so the last measurement is the depth of the final state of every env of ``env_ids``."""
     # penetration rejection: redraw the noise of the envs that start inside the terrain (one host sync per round: the size of the failing subset)
-    sel = (terrain_penetration_depth(env, asset_cfg, terrain_name)[env_ids] > max_penetration).nonzero(as_tuple=False).squeeze(-1)
+    depth = terrain_penetration_depth(env, asset_cfg, terrain_name)
+    sel = (depth[env_ids] > max_penetration).nonzero(as_tuple=False).squeeze(-1)
     num_resampled = len(sel)
     for _ in range(max_resample):
         if len(sel) == 0:
             break
         _write_reference_reset(asset, env_ids[sel], *(x[sel] for x in ref), *noise)
-        still = terrain_penetration_depth(env, asset_cfg, terrain_name)[env_ids[sel]] > max_penetration
+        depth = terrain_penetration_depth(env, asset_cfg, terrain_name)
+        still = depth[env_ids[sel]] > max_penetration
         sel = sel[still.nonzero(as_tuple=False).squeeze(-1)]
     num_fallback, num_ref_pen = len(sel), 0
     if num_fallback > 0:  # the noise-free reference state
         _write_reference_reset(asset, env_ids[sel], *(x[sel] for x in ref), {}, {}, (0.0, 0.0), clamp_joint_pos_to_limits)
-        num_ref_pen = int((terrain_penetration_depth(env, asset_cfg, terrain_name)[env_ids[sel]] > max_penetration).sum())
+        depth = terrain_penetration_depth(env, asset_cfg, terrain_name)
+        num_ref_pen = int((depth[env_ids[sel]] > max_penetration).sum())
     stats = getattr(env, "reset_penetration_stats", None)
     if stats is None:
         stats = env.reset_penetration_stats = torch.zeros(4, dtype=torch.float64)
     stats += torch.tensor([len(env_ids), num_resampled, num_fallback, num_ref_pen], dtype=torch.float64)
+    return depth
 
 
 def _apply_rigid_object_states(

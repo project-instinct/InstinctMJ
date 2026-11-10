@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import MISSING, dataclass, field
 
+import numpy as np
 from mjlab.managers import CurriculumTermCfg, EventTermCfg
 from mjlab.managers import RewardTermCfg as RewTermCfg
 from mjlab.managers import SceneEntityCfg
@@ -21,27 +22,36 @@ import instinct_mj.tasks.acp.mdp as acp_mdp
 from instinct_mj.managers import MultiRewardCfg
 from instinct_mj.tasks.acp.goal_terrains import GoalArena, GoalArenaCfg
 from instinct_mj.tasks.acp.mdp import goal as goal_mdp
-
-
-def _edit_stage3_scene_spec(arena: GoalArena):
-    def edit(spec) -> None:
-        arena.add_to_spec(spec)  # before the terrain edits (friction, geom group of the ray-cast sensors)
-        acp_cfg._edit_acp_scene_spec(spec)
-
-    return edit
+from instinct_mj.tasks.acp.scene_cfg import AcpSceneCfg, _edit_acp_scene_spec
+from instinct_mj.tasks.acp.terrain_layout import grid_bounds
 
 
 @dataclass(kw_only=True)
-class AcpStage3SceneCfg(acp_cfg.AcpSceneCfg):
-    """ACP scene with the arena of procedural goal-reaching terrains added to the terrain body (beside the motion-matched terrains)."""
+class AcpStage3SceneCfg(AcpSceneCfg):
+    """ACP scene with the arena of procedural goal-reaching terrains added to the terrain body, beside the motion-matched reference tiles.
+
+    The arena is placed from the actual reference tile grid (``terrain_layout.grid_bounds`` of the terrain generator's final tile count and size, read when the
+    layout is used), so the simulated geometry, the arena tables (spawn / goal), and the analytic height maps (built from the compiled model) share one layout."""
 
     arena_cfg: GoalArenaCfg = field(default_factory=GoalArenaCfg)
-    arena: GoalArena = field(init=False)
+    # ``self.arena`` (a ``GoalArena``) is built in ``__post_init__`` and deliberately not a dataclass field: the command-line parser would rebuild a field
+    # from the signature of ``GoalArena`` and lose the link to the reference tile grid.
 
     def __post_init__(self):
         super().__post_init__()
-        self.arena = GoalArena(self.arena_cfg)
-        self.spec_fn = _edit_stage3_scene_spec(self.arena)
+        self.arena = GoalArena(self.arena_cfg, reference_bounds=self.reference_bounds)
+        self.spec_fn = self.edit_spec
+
+    def reference_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        """(lo, hi) xy rectangle of the reference tile grid."""
+        generator = self.terrain.terrain_generator
+        if generator.num_rows <= 0:
+            raise ValueError("The reference terrain has no tile count yet (the task cfg resolves it from the dataset).")
+        return grid_bounds(generator.num_rows * generator.num_cols, tuple(generator.size))
+
+    def edit_spec(self, spec) -> None:
+        self.arena.add_to_spec(spec)  # before the terrain edits (friction, geom group of the ray-cast sensors)
+        _edit_acp_scene_spec(spec)
 
 
 def make_stage3_commands() -> dict:
@@ -52,15 +62,18 @@ def make_stage3_commands() -> dict:
 
 
 def make_stage3_rewards() -> dict[str, RewTermCfg]:
-    """Paper Table 3, Stage 3: the tracking terms on the reference envs (weights of Stages 1 / 2), the three reference-contact terms
-    disabled (``1 - eta_rew = 0``), ``track_planned_contact`` 1.5 (evaluated against the reference targets by the env, the runner's
-    reward uses the planner targets), the goal terms on the goal envs and the goal style terms."""
+    """Paper Table 3, Stage 3: the reference tracking terms of ``acp_cfg.make_rewards`` (the same definition as Stages 1 / 2, incl. the SuperMimic
+    body terms) on the reference envs, the three reference-contact terms disabled (``1 - eta_rew = 0``; ``track_body_pos_anchor`` fades with them
+    in the runner, ``ACPMDP.weights``), ``track_planned_contact`` 1.5 (evaluated against the reference targets by the env, the runner's reward
+    uses the planner targets), the goal terms on the goal envs and the goal style terms."""
     rewards = acp_cfg.make_rewards()
     for name, func in (
         ("track_base_pos", goal_mdp.track_base_pos_ref), ("track_base_vel", goal_mdp.track_base_vel_ref),
         ("track_joint_pos", goal_mdp.track_joint_pos_ref), ("track_joint_vel", goal_mdp.track_joint_vel_ref),
         ("track_contact_label", goal_mdp.track_contact_label_ref), ("track_contact_pos_base", goal_mdp.track_contact_pos_base_ref),
         ("track_contact_pos_global", goal_mdp.track_contact_pos_global_ref), ("track_planned_contact", goal_mdp.track_planned_contact_ref),
+        ("track_body_pos_anchor", goal_mdp.track_body_pos_anchor_ref), ("track_body_ori", goal_mdp.track_body_ori_ref),
+        ("track_body_lin_vel", goal_mdp.track_body_lin_vel_ref), ("track_body_ang_vel", goal_mdp.track_body_ang_vel_ref),
     ):  # fmt: skip
         rewards[name].func = func
     for name in ("track_contact_label", "track_contact_pos_base", "track_contact_pos_global"):
@@ -95,7 +108,7 @@ def make_stage3_events() -> dict[str, EventTermCfg]:
 
 
 def make_stage3_curriculum() -> dict[str, CurriculumTermCfg]:
-    """CSI of the reference envs (Stage 3: initial phase 0, mode "start") and the terrain curriculum of the goal envs."""
+    """Episode start of the reference envs (Stage 3: initial phase 0, mode "start") and the terrain curriculum of the goal envs."""
     curriculum = acp_cfg.make_curriculum()
     curriculum[acp_cfg.CURRICULUM_NAME].params["mode"] = "start"
     curriculum["goal_terrain"] = CurriculumTermCfg(
@@ -106,12 +119,13 @@ def make_stage3_curriculum() -> dict[str, CurriculumTermCfg]:
 
 
 def make_stage3_terminations() -> dict[str, DoneTermCfg]:
-    """The reference terminations masked to the reference envs; goal envs: the 15 s time-out and the fall."""
+    """The v1 reference terminations (``acp_cfg.make_terminations``) masked to the reference envs; goal envs: the 15 s time-out and the fall."""
     terminations = acp_cfg.make_terminations()
     terminations["dataset_exhausted"].func = goal_mdp.dataset_exhausted_ref_only
     terminations["base_pos_too_far"].func = goal_mdp.pos_far_from_ref_ref_only
     terminations["base_pg_too_far"].func = goal_mdp.projected_gravity_far_from_ref_ref_only
-    terminations["link_pos_too_far"].func = goal_mdp.link_pos_far_from_ref_ref_only
+    terminations["base_xy_too_far"].func = goal_mdp.pos_xy_far_from_ref_ref_only
+    terminations["foot_pos_too_far"].func = goal_mdp.feet_far_from_ref_ref_only
     terminations["goal_time_out"] = DoneTermCfg(func=goal_mdp.goal_time_out, time_out=True)
     terminations["goal_fall"] = DoneTermCfg(func=goal_mdp.goal_fall, time_out=False)
     return terminations

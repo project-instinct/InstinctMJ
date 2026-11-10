@@ -3,7 +3,10 @@
 A contact-conditioned whole-body tracker over reference motions with aligned terrains. The tracker observes proprioception,
 a 9 x 7 height scan, the next contact target of each of 9 contact bodies (Stage 1: read from the reference contact labels)
 and a goal command; the planner (Stage 2/3) reads the 17 x 11 scan, the proprioception and the goal. Rewards follow Table 3
-of the paper, domain randomization Table S2.
+of the paper plus the SuperMimic body terms, domain randomization Table S2.
+
+``make_rewards`` / ``make_terminations`` / ``make_events`` are THE definition of the v1 MDP, shared by Stages 1, 2 and 3 (Stage 3 only masks
+the reference terms to the reference envs, ``acp_stage3_env_cfg``). The v1 deviations from the paper are listed in ``rl/acp/PLAN.md``.
 
 The reward weights / parameters, terminations, action scale and PD gains of this env are read by the SuperMimic ACP runner.
 Values the paper does not give are marked ``# ACP-unspecified``.
@@ -19,22 +22,19 @@ from mjlab.managers import ObservationTermCfg as ObsTermCfg
 from mjlab.managers import RewardTermCfg as RewTermCfg
 from mjlab.managers import SceneEntityCfg
 from mjlab.managers import TerminationTermCfg as DoneTermCfg
-from mjlab.sensor import ContactMatch, ContactSensorCfg, GridPatternCfg, ObjRef, SensorCfg
+from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.utils.noise import UniformNoiseCfg
 
 import instinct_mj.envs.mdp as instinct_mdp
 import instinct_mj.tasks.acp.mdp as acp_mdp
-import instinct_mj.tasks.shadowing.perceptive.perceptive_env_cfg as perceptual_cfg
-from instinct_mj.assets.unitree_g1 import G1_29DOF_JOINT_VELOCITY_LIMITS
 from instinct_mj.envs.manager_based_rl_env_cfg import InstinctRlEnvCfg
 from instinct_mj.managers import MultiRewardCfg
-from instinct_mj.motion_reference.motion_reference_cfg import MotionReferenceManagerCfg
-from instinct_mj.rl.acp.planner import CONTACT_LINKS
+from instinct_mj.tasks.acp.robot_limits import ACP_G1_JOINT_VELOCITY_LIMITS
+from instinct_mj.tasks.acp.scene_cfg import AcpSceneCfg
 
 PROPRIO_HISTORY_LENGTH = 5
 
-# Velocity limits of the joints of the robot (the regex dict of the 29-DoF G1 without the wrist entries, which match no joint).
-ACP_G1_JOINT_VELOCITY_LIMITS = {k: v for k, v in G1_29DOF_JOINT_VELOCITY_LIMITS.items() if "wrist" not in k}
+# Velocity limits of the joints of the robot: ``robot_limits.ACP_G1_JOINT_VELOCITY_LIMITS`` (the authors' model has none; datasheet values, see there).
 
 # The 23 controlled joints: all joints of the robot (the wrists are welded in the ACP G1; the regex keeps the wrist-free selection explicit).
 ACTION_JOINT_NAMES = (r"^(?!.*wrist).*$",)
@@ -42,98 +42,13 @@ ACTION_JOINT_NAMES = (r"^(?!.*wrist).*$",)
 # Reward terms read the reference through this command term (SuperMimic reads the term parameters from the env).
 CONTACTS_COMMAND = "acp_reference_contacts"
 GOAL_COMMAND = "acp_goal"
-CURRICULUM_NAME = "curriculum_state_init"
-
-# ACP-unspecified: friction of the terrain geoms. MuJoCo mixes the friction of two geoms with max(), so a ground friction
-# at the lower bound of the robot friction range makes the contact friction equal to the sampled robot friction
-# U(0.3, 1.2) (paper Table S2); without randomization the robot geoms keep their default friction (1.0).
-TERRAIN_FRICTION = 0.3
+CURRICULUM_NAME = "episode_start"
 
 
-def _edit_acp_scene_spec(spec) -> None:
-    perceptual_cfg._edit_perceptive_scene_spec(spec)
-    for geom in spec.body("terrain").geoms:
-        geom.friction[0] = TERRAIN_FRICTION
-        # the height scanner casts rays against geom group 0 only: the robot (groups 2 / 3) is invisible to it
-        geom.group = 0
-
-
-@dataclass(kw_only=True)
-class AcpSceneCfg(perceptual_cfg.PerceptiveShadowingSceneCfg):
-    """Perceptive-shadowing scene (motion-matched terrains, ``motion_reference`` sensor) with the ACP sensors."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.spec_fn = _edit_acp_scene_spec
-
-
-def make_acp_scene_sensors(*, motion_reference: MotionReferenceManagerCfg) -> tuple[SensorCfg, ...]:
-    """Contact sensor over the 9 contact links, the 17 x 11 height scanner and the motion reference."""
-    return (
-        # all robot bodies vs the terrain: the ``illegal_reset_contact`` termination (a reset into the terrain)
-        ContactSensorCfg(
-            name="contact_forces",
-            primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
-            secondary=ContactMatch(mode="body", pattern="terrain"),
-            fields=("force",),
-            reduce="netforce",
-            history_length=4,  # one policy step (decimation 4) of physics substeps
-        ),
-        ContactSensorCfg(
-            name="acp_contact_forces",
-            primary=ContactMatch(mode="body", pattern=CONTACT_LINKS, entity="robot"),
-            secondary=ContactMatch(mode="body", pattern="terrain"),  # terrain contacts only (as the reference labels): no self-contact of the links
-            fields=("force",),
-            reduce="netforce",
-            # one policy step (decimation 4) of physics substeps; measured contact = max over the window of |F_z| > 1 N
-            history_length=4,
-        ),
-        # contact point of the strongest contact of each contact link (the position of the hindsight labels of the planner)
-        ContactSensorCfg(
-            name="acp_contact_points",
-            primary=ContactMatch(mode="body", pattern=CONTACT_LINKS, entity="robot"),
-            secondary=ContactMatch(mode="body", pattern="terrain"),
-            fields=("found", "force", "pos"),
-            reduce="maxforce",
-            num_slots=1,
-        ),
-        # actor / planner scan: 17 x 11 grid from the estimated pelvis pose (odometry delay and drift), as in the authors'
-        # deploy stack (g1_rsl_cpp): rays start 5 m above the pelvis, straight down, yaw of the pelvis
-        acp_mdp.PelvisRayCastSensorCfg(
-            name="height_scanner",
-            frame=ObjRef(type="body", name="pelvis", entity="robot"),
-            pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
-            ray_alignment="yaw",
-            max_distance=10.0,
-            exclude_parent_body=True,
-            # terrain only: the terrain geoms are moved to geom group 0 (``_edit_acp_scene_spec``), the robot geoms are
-            # in groups 2 / 3
-            include_geom_groups=(0,),
-            ray_offset=5.0,
-            use_estimated_pose=True,
-            debug_vis=False,
-        ),
-        # critic scan: the same grid from the true pelvis pose (no delay, no drift)
-        acp_mdp.PelvisRayCastSensorCfg(
-            name="critic_height_scanner",
-            frame=ObjRef(type="body", name="pelvis", entity="robot"),
-            pattern=GridPatternCfg(resolution=0.1, size=(1.6, 1.0)),
-            ray_alignment="yaw",
-            max_distance=10.0,
-            exclude_parent_body=True,
-            include_geom_groups=(0,),
-            ray_offset=5.0,
-            use_estimated_pose=False,
-            debug_vis=False,
-        ),
-        motion_reference,
-    )
-
-
-def make_commands() -> dict:
-    """Reference contacts (Stage 1 contact targets, reference labels) and the goal command."""
+def make_commands(*, require_full_clip: bool = True) -> dict:
+    """Reference contacts (Stage 1 contact targets, reference labels) and the goal command. ``require_full_clip``: the episode cap must fit the longest clip."""
     return {
-        CONTACTS_COMMAND: acp_mdp.AcpReferenceContactsCfg(),
+        CONTACTS_COMMAND: acp_mdp.AcpReferenceContactsCfg(require_full_clip=require_full_clip),
         GOAL_COMMAND: acp_mdp.AcpGoalCommandCfg(),
     }
 
@@ -243,8 +158,11 @@ def make_observations() -> dict[str, ObsGroupCfg]:
 
 
 def make_rewards() -> dict[str, RewTermCfg]:
-    """Stage 1 rewards of paper Table 3 (per-step reward = dt * sum_i w_i r_i); the regularizers sum over the 23 controlled
-    joints."""
+    """Rewards of the v1 task (per-step reward = dt * sum_i w_i r_i; the regularizers sum over the 23 controlled joints): paper Table 3
+    (``track_base_pos`` sigma 0.5, ``track_contact_pos_global`` sigma 1.0) plus the four SuperMimic r_track body terms (App. A Table A.2 /
+    supermimic_vibed mdp.py:108-131, all weight 1.0, mean over the 14 tracked bodies ``TRACKED_LINKS``): ``track_body_pos_anchor`` (sigma 0.3 m;
+    the reference positions re-anchored to (robot root xy, reference root z) and rotated by the yaw of R R*^T), ``track_body_ori`` (0.4),
+    ``track_body_lin_vel`` (1.0), ``track_body_ang_vel`` (3.14). SuperMimic's two root terms are not added (``track_base_pos`` covers them)."""
     action_joints = SceneEntityCfg("robot", joint_names=ACTION_JOINT_NAMES)
     command = {"command_name": CONTACTS_COMMAND}
     return {
@@ -283,12 +201,16 @@ def make_rewards() -> dict[str, RewTermCfg]:
             weight=1.0,
             params={**command, "sigma": 1.0, "moving_speed_threshold": 0.1},
         ),
-        # Stage 1: weight 0 (evaluated against the reference contact targets as a diagnostic); Stage 2 / 3 weight 1.5.
+        # Stage 1: weight 0 (evaluated against the reference contact targets as a diagnostic); the runner gives it 1.5 * eta_rew in Stages 2 / 3.
         "track_planned_contact": RewTermCfg(
             func=acp_mdp.track_planned_contact,
             weight=0.0,
             params={**command, "sigma": 1.0},
         ),
+        "track_body_pos_anchor": RewTermCfg(func=acp_mdp.track_body_pos_anchor, weight=1.0, params={**command, "sigma": 0.3}),
+        "track_body_ori": RewTermCfg(func=acp_mdp.track_body_ori, weight=1.0, params={**command, "sigma": 0.4}),
+        "track_body_lin_vel": RewTermCfg(func=acp_mdp.track_body_lin_vel, weight=1.0, params={**command, "sigma": 1.0}),
+        "track_body_ang_vel": RewTermCfg(func=acp_mdp.track_body_ang_vel, weight=1.0, params={**command, "sigma": 3.14}),
         "action_rate": RewTermCfg(func=mdp.action_rate_l2, weight=-0.1),
         "action_rate_2nd": RewTermCfg(func=mdp.action_acc_l2, weight=-0.05),
         "joint_torque": RewTermCfg(
@@ -304,7 +226,7 @@ def make_rewards() -> dict[str, RewTermCfg]:
         "dof_pos_limits": RewTermCfg(
             func=acp_mdp.joint_pos_limits_clipped,
             weight=-10.0,
-            params={"asset_cfg": action_joints, "max_value": 30.0},
+            params={"asset_cfg": action_joints, "max_value": 30.0},  # Table 3: min(30, sum_j excess)
         ),
         "dof_vel_limits": RewTermCfg(
             func=acp_mdp.dof_vel_limits,
@@ -319,20 +241,21 @@ def make_rewards() -> dict[str, RewTermCfg]:
         "contact_acc": RewTermCfg(
             func=acp_mdp.contact_acc,
             weight=-0.01,
-            params={**command, "max_value": 1e4},
+            # "vel1": the difference of the link velocities (the authors' framework), not the second difference of the positions
+            params={**command, "max_value": 1e4, "mode": "vel1"},  # Table 3: min(1e4, sum_b |p''_b|)
         ),
     }
 
 
 def make_events() -> dict[str, EventTermCfg]:
-    """Domain randomization of paper Table S2, the reset to the reference and the CSI start phase."""
+    """Domain randomization of paper Table S2, the reset to the reference and the episode start frame."""
     return {
         "match_motion_ref_with_scene": EventTermCfg(
             func=instinct_mdp.match_motion_ref_with_scene,
             mode="startup",
             params={"motion_ref_cfg": SceneEntityCfg("motion_reference")},
         ),
-        # friction U(0.3, 1.2) (one value per env for all robot geoms; ground friction see TERRAIN_FRICTION).
+        # friction U(0.3, 1.2) (one value per env for all robot geoms; ground friction see ``scene_cfg.TERRAIN_FRICTION``).
         # Restitution U(0, 0.5) is skipped: MuJoCo geoms have no restitution coefficient.
         "physics_material": EventTermCfg(
             func=mdp.dr.geom_friction,
@@ -414,13 +337,18 @@ def make_events() -> dict[str, EventTermCfg]:
                 "bias_range": (-0.03, 0.03),
             },
         ),
-        # CSI: the clip start phase must be set after the motion reference reset and before the robot reset.
-        "csi_start_phase": EventTermCfg(
+        # the clip start frame (SuperMimic reset bins) must be set after the motion reference reset and before the robot reset. Start frames
+        # whose reference penetrates the terrain by more than 1 cm are not used (the fallback of the reset rejection, the noise-free
+        # reference, must itself be clear of the terrain).
+        "episode_start": EventTermCfg(
             func=acp_mdp.reset_motion_start_phase,
             mode="reset",
-            params={"curriculum_name": CURRICULUM_NAME},
+            params={"curriculum_name": CURRICULUM_NAME, "legal_start_max_penetration": 0.01},
         ),
-        # base pose / velocity from the reference, base height + U(0, 0.05) m, joint positions +-0.2 rad
+        # base pose / velocity from the reference, base height + U(0, 0.05) m, joint positions +-0.2 rad (clamped to the joint limits), no
+        # root pose / velocity noise (Table S2; the SuperMimic reference noise is made for flat ground and put robots on contact poses into
+        # ladder rungs / boxes). The noise of an env that starts > 1 cm inside the terrain is redrawn (up to 3 times, then the noise-free
+        # reference) and the root is raised by the deepest remaining penetration (a foot / hand pushed into a box top starts on it).
         "reset_robot": EventTermCfg(
             func=instinct_mdp.reset_robot_state_by_reference,
             mode="reset",
@@ -431,9 +359,15 @@ def make_events() -> dict[str, EventTermCfg]:
                 "dof_vel_ratio": 1.0,
                 "base_lin_vel_ratio": 1.0,
                 "base_ang_vel_ratio": 1.0,
-                "randomize_pose_range": {"z": (0.0, 0.05)},
-                "randomize_velocity_range": {},
-                "randomize_joint_pos_range": (-0.2, 0.2),
+                # reset noise of zita-ch/supermimic_vibed (env.py:153-167; replaces Table S2's z + U(0, 0.05) m / joints +-0.2 rad): root position, orientation
+                # (world-frame rotation), world linear / angular velocity and joint noise around the reference state (the penetration resampling / lift below stays)
+                "randomize_pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (-0.01, 0.01), "roll": (-0.1, 0.1), "pitch": (-0.1, 0.1), "yaw": (-0.2, 0.2)},
+                "randomize_velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "z": (-0.2, 0.2), "roll": (-0.52, 0.52), "pitch": (-0.52, 0.52), "yaw": (-0.78, 0.78)},
+                "randomize_joint_pos_range": (-0.1, 0.1),
+                "clamp_joint_pos_to_limits": True,
+                "max_penetration": 0.01,
+                "max_resample": 3,
+                "lift_out_of_terrain": True,
             },
         ),
         # per-episode odometry error of the pelvis pose (Table S2): drift in a 0.05 m disk (XY) / U(+-0.05) m (Z) and a
@@ -452,26 +386,22 @@ def make_events() -> dict[str, EventTermCfg]:
 
 
 def make_curriculum() -> dict[str, CurriculumTermCfg]:
-    """Curriculum State Initialization (``init_phase_mode``: "csi" Stage 1, "uniform" Stage 2, "start" evaluation)."""
+    """Episode start (``mode``: "bins" SuperMimic reset bins attached by the runner, "uniform", "start" = phase 0 for evaluation / Stage 3)."""
     return {
         CURRICULUM_NAME: CurriculumTermCfg(
-            func=acp_mdp.CurriculumStateInit,
-            params={
-                "mode": "csi",
-                "init_phase": 0.9,
-                "step": 0.05,
-                "success_phase": 0.99,
-                "max_phase": 0.99,
-                "uniform_max_phase": 0.98,
-            },
+            func=acp_mdp.EpisodeStart,
+            params={"mode": "bins", "uniform_max_phase": 0.98},
         ),
     }
 
 
 def make_terminations() -> dict[str, DoneTermCfg]:
-    """ACP-unspecified: the perceptive shadowing terminations (thresholds included), plus the time-out at the clip end.
-    The base terms compare the pelvis (the base of the authors' deploy stack) with the reference pelvis; the link term
-    covers the 9 contact links."""
+    """The v1 terminations (the paper gives no thresholds; the ACP authors: the robot fell or lost the reference): root height |z - z_ref| > 0.25 m
+    (``base_pos_too_far``, height only) and tilt |R_zz - R_zz_ref| > 0.8 (``base_pg_too_far``, z component only), as SuperMimic (upstream mdp.py:147-161);
+    the pelvis horizontally > 0.5 m from the reference pelvis (``base_xy_too_far``) and a foot > 0.5 m (3-D) from the reference foot (``foot_pos_too_far``)
+    (# ACP-unspecified: 0.5 m, the success radius of the evaluation) and a contact violation, the torso (with the head) touching the terrain with > 1 N
+    while the reference torso is > 5 cm from it (``contact_violation``). Time-outs (not failures): the episode cap (``time_out``), the clip end
+    (``dataset_exhausted``) and the reset guard ``illegal_reset_contact``."""
     return {
         "time_out": DoneTermCfg(func=mdp.time_out, time_out=True),
         "dataset_exhausted": DoneTermCfg(
@@ -481,7 +411,7 @@ def make_terminations() -> dict[str, DoneTermCfg]:
         ),
         # InstinctLab's perceptive shadowing term: an episode whose first 2 policy steps both see > 500 N on a body other than the feet / hands
         # started inside the terrain (reset noise on a contact pose, e.g. the ladder rungs). A time-out (not a failure of the policy): bootstrapped,
-        # no CSI failure, nothing to mirror in the imagination.
+        # no failure for the bins (clip failure rate), nothing to mirror in the imagination.
         "illegal_reset_contact": DoneTermCfg(
             func=instinct_mdp.illegal_reset_contact,
             time_out=True,
@@ -503,32 +433,60 @@ def make_terminations() -> dict[str, DoneTermCfg]:
         "base_pg_too_far": DoneTermCfg(
             func=acp_mdp.projected_gravity_far_from_ref,
             time_out=False,
-            params={"command_name": CONTACTS_COMMAND, "projected_gravity_threshold": 0.8, "z_only": False},
+            params={"command_name": CONTACTS_COMMAND, "projected_gravity_threshold": 0.8, "z_only": True},
         ),
-        "link_pos_too_far": DoneTermCfg(
-            func=instinct_mdp.link_pos_far_from_ref,
+        "base_xy_too_far": DoneTermCfg(
+            func=acp_mdp.pos_xy_far_from_ref,
             time_out=False,
-            params={
-                "asset_cfg": SceneEntityCfg("robot"),
-                "reference_cfg": SceneEntityCfg(
-                    "motion_reference",
-                    body_names=list(CONTACT_LINKS),
-                    preserve_order=True,
-                ),
-                "distance_threshold": 0.25,
-                "in_base_frame": False,
-                "check_at_keyframe_threshold": -1,
-                "height_only": True,
-                "print_reason": False,
-            },
+            params={"command_name": CONTACTS_COMMAND, "distance_threshold": 0.5},
+        ),
+        "foot_pos_too_far": DoneTermCfg(
+            func=acp_mdp.feet_far_from_ref,
+            time_out=False,
+            params={"command_name": CONTACTS_COMMAND, "distance_threshold": 0.5},
+        ),
+        # the torso carries the head (the G1 has no head link); the imagination mirrors it with the exact torso-terrain distance (sdf_contact.VIOLATION_LINKS)
+        "contact_violation": DoneTermCfg(
+            func=acp_mdp.body_contact_violation,
+            time_out=False,
+            params={"command_name": CONTACTS_COMMAND, "sensor_name": "contact_forces", "asset_cfg": SceneEntityCfg("robot", body_names=["torso_link"]), "threshold": 1.0},
         ),
     }
+
+
+def make_sim() -> SimulationCfg:
+    """Physics of the ACP tasks, all values explicit: 200 Hz, implicit-fast Newton solver with 10 iterations / 20 line-search iterations (the authors' MJCF
+    has 50; v1 keeps the 10 / 20 of the mjlab scene layer, ``scripts/acp/measure_solver.py`` compares both), pyramidal cone, sparse Jacobian, 128 CCD
+    iterations (MuJoCo 3.5's native CCD can exhaust a lower ceiling on the motion-matched terrain), 128 contacts / 700 constraints per world."""
+    return SimulationCfg(
+        nconmax=128,
+        njmax=700,
+        contact_sensor_maxmatch=128,
+        mujoco=MujocoCfg(
+            timestep=0.005,
+            integrator="implicitfast",
+            impratio=1.0,
+            cone="pyramidal",
+            jacobian="sparse",
+            solver="newton",
+            iterations=10,
+            tolerance=1e-8,
+            ls_iterations=20,
+            ls_tolerance=0.01,
+            ccd_iterations=128,
+            gravity=(0.0, 0.0, -9.81),
+        ),
+    )
 
 
 @dataclass(kw_only=True)
 class AcpTrackEnvCfg(InstinctRlEnvCfg):
     scene: AcpSceneCfg = MISSING
     decimation: int = 4
+    """Policy 50 Hz over the 200 Hz physics (``sim.mujoco.timestep`` 0.005 s)."""
+    episode_length_s: float = 120.0
+    """ACP-unspecified: the episode lasts until the clip end (``dataset_exhausted``); this is only the upper bound (the command term checks that the longest clip fits)."""
+    sim: SimulationCfg = field(default_factory=lambda: make_sim())
     commands: dict = field(default_factory=make_commands)
     actions: dict = field(default_factory=make_actions)
     observations: dict = field(default_factory=make_observations)
@@ -536,21 +494,10 @@ class AcpTrackEnvCfg(InstinctRlEnvCfg):
     events: dict = field(default_factory=make_events)
     curriculum: dict = field(default_factory=make_curriculum)
     terminations: dict = field(default_factory=make_terminations)
-
-    def __post_init__(self):
-        # policy 50 Hz, PD 200 Hz
-        self.decimation = 4
-        # ACP-unspecified: the episode lasts until the clip end (``dataset_exhausted``); this is only the upper bound
-        # (the command term checks that the longest clip fits)
-        self.episode_length_s = 120.0
-        self.sim.mujoco.timestep = 0.005
-        self.sim.mujoco.iterations = 10
-        self.sim.mujoco.ls_iterations = 20
-        self.sim.mujoco.ccd_iterations = 128
-        self.sim.mujoco.jacobian = "sparse"
-        self.sim.nconmax = 128
-        self.sim.njmax = 700
-        self.sim.contact_sensor_maxmatch = 128
+    contact_detect: str = "force_head"
+    """How c^meas of the nine contact bodies is decided (``track_contact_label``, the slippage / foot terms of Stage 3, the planner's hindsight labels): "force_head" (default) =
+    the contact sensor's |F_z| > 1 N (the imagination then uses the world model's contact head, as the ACP authors' SuperMimic), "sdf" = the signed distance of the body collision
+    capsules to the terrain primitives (exact) is below ``d_on`` (``rl/acp/sdf_contact.py``; the imagination uses its soft version). Keep it equal to the runner's ``contact_detect``."""
 
     def disable_randomization(self) -> None:
         """Evaluation: no domain randomization and no observation noise (the reset keeps the reference state)."""
@@ -568,6 +515,7 @@ class AcpTrackEnvCfg(InstinctRlEnvCfg):
             self.events[name] = None
         reset_robot = self.events["reset_robot"].params
         reset_robot["randomize_pose_range"] = {"z": (0.0, 0.0)}
+        reset_robot["randomize_velocity_range"] = {}
         reset_robot["randomize_joint_pos_range"] = (0.0, 0.0)
         for group in self.observations.values():
             group.enable_corruption = False

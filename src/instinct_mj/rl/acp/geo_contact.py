@@ -1,8 +1,10 @@
 """Geometric contact of the nine contact links: a differentiable contact probability computed from the (imagined) robot state and the real terrain, so that the
 contact rewards of the imagination do not depend on the world model's learned contact head.
 
-For every contact link a set of surface points of its collision geometry is kept (mesh vertices thinned by farthest-point sampling, the end points of the foot
-capsules with their radius). A point's clearance is its height above the terrain directly below it (exact ray casts against the terrain geoms:
+For every contact link a set of surface points of its collision geometry is kept (mesh vertices thinned by farthest-point sampling for the authors'
+meshes, which the tasks simulate by default; the capsule end points with their radius and the sphere centres of the optional simplified model,
+``simplified_collision=True``, are supported as well). A point's clearance is
+its height above the terrain directly below it (exact ray casts against the terrain geoms:
 ``ExactHeightScanner.ground_below``) minus the radius of its primitive; the clearance of a link is the minimum over its points, and
 ``contact = sigmoid(-(clearance - d0) / tau)``. The terrain height is piecewise constant, so the gradient is exact: 1 w.r.t. the point height (through the forward
 kinematics to the joints) and 0 w.r.t. the horizontal position. Contacts with vertical faces (a hand against a wall) are not seen by this vertical clearance."""
@@ -36,6 +38,8 @@ def link_surface_points(mjcf_path: str, links: list[str], points_per_link: int) 
             elif model.geom_type[g] == mujoco.mjtGeom.mjGEOM_CAPSULE:
                 ends = np.array([[0, 0, -model.geom_size[g, 1]], [0, 0, model.geom_size[g, 1]]])
                 pts.append(model.geom_pos[g] + ends @ R.T), rad.append(np.full(2, model.geom_size[g, 0]))
+            elif model.geom_type[g] == mujoco.mjtGeom.mjGEOM_SPHERE:
+                pts.append(model.geom_pos[g][None]), rad.append(np.array([model.geom_size[g, 0]]))
             else:
                 raise NotImplementedError(f"{name}: geom type {mujoco.mjtGeom(model.geom_type[g]).name}")
         pts, rad = np.concatenate(pts), np.concatenate(rad)
