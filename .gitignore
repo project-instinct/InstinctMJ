@@ -48,3 +48,5 @@ webplay_hoi.py
 /acp_player/
 # local launchers (systemd-run, local paths), not part of the repository
 /src/instinct_mj/scripts/acp/run_stage*.sh
+# local web viewers (viser), not part of the repository
+/webplay_*.py

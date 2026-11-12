@@ -41,8 +41,6 @@ instinct-train Instinct-Perceptive-Shadowing-Render-G1-v0 --num-envs 1024
 instinct-train Instinct-Perceptive-Shadowing-Latent-G1-v0 --num-envs 1024
 # evaluate (success rate per motion, results in <run>/eval/)
 python -m instinct_mj.scripts.supermimic.evaluate --checkpoint <run>/model_<it>.pt --motion-folder <dataset> --num-envs 128
-# web viewer
-python webplay_supermimic.py <run>/model_<it>.pt
 ```
 
 Any field of `config.py` (`SuperMimicRunnerCfg`) can be overridden with `--agent.<field>`, e.g. `--agent.pi-batch 2048`. Single GPU.

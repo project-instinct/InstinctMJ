@@ -59,8 +59,6 @@ uv run instinct-train Instinct-ACP-Stage3-G1-v1 --agent.load-run <stage2 run dir
 
 # per-clip evaluation from the clip start
 uv run python -m instinct_mj.scripts.acp.eval_tracker <run>/model_<it>.pt --mode robust --out eval.json
-# live policy viewer (viser), with the planner's contact targets for Stage 2 / 3 checkpoints
-uv run python webplay_acp.py policy --checkpoint <run>/model_<it>.pt --dataset <dataset> --port 8192
 ```
 
 The defaults are the recommended configuration (Stage 1: 4096 envs, Stages 2 / 3: 2048). Common overrides: `--num-envs`,
