@@ -1,8 +1,10 @@
 """Runner config of the SuperMimic-style ACP trainer (:class:`~instinct_mj.rl.acp.runner.ACPRunner`).
 
-The hyperparameters of the loop (collect -> k-step world-model fit -> H-step BPTT policy + GAE critic) are those of
-``SuperMimicRunnerCfg`` (no vision: the scan is analytic); the ``contact_source`` / ``eta_*`` fields are the Stage 2 hooks
-(paper Eq. 3, Table S5).
+The loop (collect -> k-step world-model fit -> H-step BPTT policy + GAE critic) is the one of the official HybridRobotics/supermimic and is the ONLY
+path of the runner (no switches for it): semi-implicit gencoord world model without output de-normalization (GELU, Bryson loss on the gencoord loss blocks, complete
+windows), Muon + fused Adam, the LN + GELU critic on raw features with targets clamped at the analytic v_max, the normalized single-sigmoid soft termination, return-based
+reset sampling (``ReturnSampler``), DR-range encoding of the context, a replay ratio of ``replay_ratio`` and a reference that stays on the last frame of its clip.
+The fields below are the orthogonal ACP research options; the ``contact_source`` / ``eta_*`` fields are the Stage 2 hooks (paper Eq. 3, Table S5).
 """
 
 from __future__ import annotations
@@ -19,8 +21,9 @@ class ACPRunnerCfg:
     # ---- simulation / collection (collect -> k-step world-model fit -> H-step BPTT policy + GAE critic) ----
     buffer_steps: int = 1000
     """Replay buffer length in vectorized env steps, (T, N) layout (default 1000)."""
-    utd: float = 0.4
-    """Updates per vectorized simulator step (default 0.4)."""
+    replay_ratio: float = 16.0
+    """Official supermimic ``Ratio``: the training rate follows the collected data, updates per vectorized simulator step
+    utd = num_envs * replay_ratio / (wm_batches * wm_batch * wm_window) (16: utd 0.4 at 4096 envs, 0.2 at 2048; default 16)."""
     warmup_steps: int = 64
     """Simulator steps collected before any update (default 64)."""
     hist: int = 5
@@ -34,13 +37,13 @@ class ACPRunnerCfg:
     wm_batch: int = 2048
     """Windows per world-model batch (default 2048)."""
     wm_failure_frac: float = 0.25
-    """Fraction of each world-model batch drawn from windows that start within ``wm_failure_horizon`` steps before a real
-    termination; the failure head importance-weights them (default 0.25)."""
+    """Failure / termination heads only (the world model itself trains on complete windows): fraction of the head's window batch drawn from windows that start within
+    ``wm_failure_horizon`` steps before a real termination; the heads importance-weight them (default 0.25)."""
     wm_failure_horizon: int = 16
     """Steps before a real termination in which a window counts as a failure window (default 16)."""
     wm_balance_frac: float = 0.0
-    """Fraction of every world-model window batch drawn clip-balanced (every clip equally likely) instead of uniformly over the buffer, whose rows are ~70 %
-    the long episodes of the clips that are already solved (default 0: the Stage 1 run). Track only (the Stage 3 buffer has no reference clip for the goal envs)."""
+    """Failure / termination heads only: fraction of the head's window batch drawn clip-balanced (every clip equally likely) instead of uniformly over the buffer
+    (default 0). Track only (the Stage 3 buffer has no reference clip for the goal envs)."""
     wm_holdout_envs: float = 0.1
     """Fraction of envs never used for world-model / head training, only for held-out calibration diagnostics (default 0.1)."""
     wm_only_iters: int = 500
@@ -61,14 +64,13 @@ class ACPRunnerCfg:
     """With exact_scan, build the auxiliary bilinear map only if ground_height is used. Exact rays stay unchanged. Default off."""
 
     # ---- failure head ----
-    # ---- failure head ----
     fail_head: bool = True
     """Use the learned failure ("continue") head in imagination, ``d = 1 - (1 - d_analytic) (1 - p_fail)``; the head is trained
     either way and the gradient through ``p_fail`` is kept (default True)."""
     fail_head_warmup_iters: int = 300
     """Iterations after the head was created before it affects the policy; it is trained from the start (default 300)."""
     fail_windows: int = 512
-    """Windows (of ``wm_batch``) that train the head, the feature computation runs the FK (default 512)."""
+    """Windows (of the head's own ``wm_batch`` window batch) that train the failure / termination heads, the feature computation runs the FK (default 512)."""
     fail_clip: float = 0.95
     """Upper clip of ``p_fail`` in imagination (default 0.95)."""
     fail_pos_weight: float = 1.0
@@ -79,66 +81,27 @@ class ACPRunnerCfg:
     """Imagination horizon H of the BPTT policy update (default 32)."""
     pi_batch: int = 1024
     """Imagination starts per policy update (default 1024)."""
-    imagine_past_clip_end: bool = False
-    """False (default, the Stage 1 run): imagination starts only at buffered states with ``f + H <= clip end``. True: starts with at least one
-    frame left in the clip are allowed; the imagined steps beyond the clip end are masked (reward 0, no critic loss) and the last step inside the
-    clip is terminal with zero continuation (the env time-outs there, ``dataset_exhausted``). Track only."""
-    clip_end_bootstrap: bool = False
-    """With ``imagine_past_clip_end``: the last imagined step inside the clip is a time-out, not a termination (SuperMimic: time-outs bootstrap): its return
-    bootstraps with the critic value of the state at the clip end instead of zero (default False: zero continuation, the old runs). Track only."""
-    reset_sampling: str = "bins"
-    """Start of an episode: "csi" = the ACP paper's Curriculum State Initialization (Stage 1; Table S4: per-clip initialization phase, initial 0.9, -0.05 after an episode reaches phase
-    0.99 and +0.05 otherwise, clipped to [0, 0.99]; ``csi_*`` below; the phases are saved in the sidecar by clip name and logged as ``csi/*``), or "bins" (default) = SuperMimic App. D.1 as it is: 1 s bins of all clips, running return per bin attributed to the start bin of the episode, p_b = 0.5 uniform +
-    0.4 softmax(-25 G_b / G_max) + 0.1 past softmax weights, start frame uniform in the bin. The reset noise of the env (Table S2) is kept, the upstream reset noise is not added.
-    Stage 3 and evaluation envs (episode start mode "start": phase 0) have no bins. Track only."""
-    csi_init_phase: float = 0.9
-    """CSI (reset_sampling "csi"): initial phase of every clip (paper Table S4: 0.9)."""
-    csi_step: float = 0.05
-    """CSI: phase adjustment per update (paper: 0.05)."""
-    csi_success_phase: float = 0.99
-    """CSI: an episode that reaches this phase of its clip is a success (paper: completion threshold 0.99) if its pelvis ends within 0.5 m of the reference pelvis horizontally
-    (``curriculums.CSI_SUCCESS_XY``, ACP-unspecified; the same holds for the clip end and the cap)."""
-    csi_max_phase: float = 0.99
-    """CSI: upper clip of the initialization phase (paper: allowed range [0, 0.99])."""
-    csi_success_on_timeout: bool = True
-    """CSI (ACP-unspecified): an episode that ends by the episode cap (10 s in v1) without a failure termination counts as a success, as one that reached the success phase. Without it the
-    clips longer than the cap could never be started earlier than cap seconds before their end (phase 0.99 is out of reach inside the cap)."""
-    bins_v2: bool = False
-    """Reset bins over the valid START frames of a clip (frames 0 .. T-2), a tail bin of less than 25 frames merged into the previous one (no zero-width and no very
-    short bins); the return of an episode that ends at the clip end gets no mean-reward bootstrap (the finite task end), only the episodes that end by the episode cap keep the upstream
-    bootstrap, and episodes shorter than 10 steps do not update G_b. The stored G_b / bin weights of a sidecar without v2 bins are not restored (default False: the old bins)."""
-    bins_difficulty_k: float = 0.0
-    """Reset bins: the uniform half of the bin distribution is weighted by the clip difficulty d_c = 1 + k f_c (f_c: running failure rate of the clip, EMA 0.02 per update, initialized
-    0.5, of its episodes that ended by a non-time-out termination), normalized to 0.5 again; the softmax and history parts are unchanged (default 0: the plain uniform half)."""
-    clip_end_exact_last: bool = False
-    """The last valid imagined transition of a start is found from the absolute frames (the transition into the clip end), so a clip end exactly at imagined step H is the last step too (default False: that step never
-    was "last" and kept the critic bootstrap of the state after it)."""
     failure_window_fix: bool = False
-    """World-model failure windows (``wm_failure_frac``): a window counts as a failure window only if the FIRST episode end at or after its start within the window is a real termination (default False: any
+    """Failure-head windows (``wm_failure_frac``): a window counts as a failure window only if the FIRST episode end at or after its start within the window is a real termination (default False: any
     termination in the next rows counts, also one of the NEXT episode, which the loss mask removes). The log has the sampled and the valid failure windows."""
     scan_slope_gradient: bool = False
     """The exact height scan has the slope gradient of the terrain: d(scan)/d(xy, yaw) from the hit normal on the faces (dz/dx = -n_x / n_z, zero for near-vertical faces and misses); default False: the terrain height
     is a constant for the gradient (0 w.r.t. the horizontal position and heading)."""
-    soft_term_tau_dist: float = 0.02
-    """Temperature [m] of the sigmoid of the soft distance terminations (height, horizontal position, contact, link) in the imagination: the per-step hazard is sigmoid((error - threshold) / tau) (default 0.02)."""
-    soft_term_tau_tilt: float = 0.04
-    """Temperature of the soft tilt termination (default 0.04)."""
+    soft_term_softness: float = 0.05
+    """Softness of the imagined termination: one sigmoid of the largest threshold-normalized error, sigmoid((max_i e_i / theta_i - 1) / softness) (official
+    ``WorldModelEnv._compute_term_prob``; the contact-violation hazard is kept; default 0.05)."""
     imagine_clamp_joints: bool = True
     """True (default, the old runs): the imagined joint positions are projected onto the hard joint range and the velocities pushing further out are zeroed (``clamp_joints``), which the
     world-model training rollout does not do and which removes the joint-limit reward and its gradient in the imagination. False: the same transition as the world-model rollout,
     the joint-limit reward sees the unclamped q; only a wide NaN guard (hard range +- 0.5 rad) remains."""
     term_source: str = "analytic"
-    """Termination of the imagined rollouts: "analytic" (default, the old runs: the env's thresholds as sigmoids, ``soft_term_tau_*``), "learned" (SuperMimic paper, Eq. 1-2: d = sigmoid of a termination head
+    """Termination of the imagined rollouts: "analytic" (default: the env's thresholds as one normalized sigmoid, ``soft_term_softness``), "learned" (SuperMimic paper, Eq. 1-2: d = sigmoid of a termination head
     ``dω(ŝ_t, g_t)`` trained with BCE on the autoregressive k-step windows against the REAL termination labels; the analytic term is not used) or "union" (1 - (1 - d_analytic)(1 - d_learned)). The head
     (``term_head.py``) is built and trained only for "learned" / "union". Goal-reaching starts of Stage 3 keep their analytic fall."""
-    clip_end_v2: bool = False
-    """The clip end of the imagination as in the real env: the transition into the frame T (one after the last valid frame) is the last real one (``dataset_exhausted`` fires there, the reference
-    stays on its last frame) and a start at the last valid frame is allowed (False: the imagined episode ends one transition early); the critic normalizer only sees the states reached
-    through valid transitions (default False)."""
     start_balance_frac: float = 0.0
     """Fraction of the imagination starts drawn clip-balanced (as ``start_sampling="per_motion"``), the rest uniformly (default 0)."""
     start_sampling: str = "uniform"
-    """Imagination starts: "uniform" over the eligible buffered states (default, the Stage 1 run) or "per_motion": every clip with an eligible
+    """Imagination starts: "uniform" over the buffered states (default, official: every buffered state with a frame ``f <= clip end``) or "per_motion": every clip with an eligible
     state has the same probability, then a uniform eligible state of that clip (long successful episodes no longer dominate). Track only."""
     gamma: float = 0.99
     """Discount factor (default 0.99)."""
@@ -206,14 +169,10 @@ class ACPRunnerCfg:
     critic_minibatches: int = 4
     """Critic minibatches per epoch (default 4)."""
     critic_hidden: str = "256,128"
-    """Hidden widths of the critic MLP(s), comma separated (default "256,128": SuperMimic Table A.4; "512,256,128": the ACP value networks, Materials and
-    Methods "three hidden layers with 512, 256, and 128 units and ELU activations"). Stage 3 uses it for both Vm and Vfs."""
+    """Hidden widths of the critic MLP(s) (Linear -> LayerNorm -> GELU, raw input features, official ``build_mlp``), comma separated (default "256,128": SuperMimic Table A.4).
+    Stage 3 uses it for both Vm and Vfs."""
     no_critic: bool = False
     """Ablation: no critic, i.e. no bootstrap value term in the return and no critic fit (default False)."""
-    value_max: float = 0.0
-    """Upper bound of the critic value wherever it is used (actor bootstrap at H and at the clip end, GAE targets; default 0 = off). The rewards are bounded
-    (largest per-step reward = sum of the positive weights x dt), so no true value exceeds that / (1 - gamma); the bound only cuts off an overestimation feedback
-    of the critic, e.g. through the never-regressed state after the clip end that the clip-end bootstrap queries."""
     # ---- wmres: contact-triggered truncation of the imagination BPTT (research/glm_proposal.md, AHAC-style; default off) ----
     wmres_cut: bool = False
     """Truncate a start's imagined return at its first world-model contact event (a link's contact probability crossing ``wmres_cut_theta`` between
@@ -238,23 +197,16 @@ class ACPRunnerCfg:
 
     # ---- schedule ----
     lr: float = 2e-4
-    """Initial learning rate (default 2e-4)."""
-    lr_decay_iters: int = 250_000
-    """Iterations of the cosine decay from ``lr`` to ``lr * lr_final_ratio``, constant afterwards (default 250000)."""
-    lr_final_ratio: float = 0.03
-    """Final learning rate as a fraction of ``lr`` (default 0.03)."""
+    """Learning rate, CONSTANT (the official supermimic has no schedule; default 2e-4). The Adam(W) part of every :class:`MuonAdam` holds it as a device tensor (fused, capturable), the Muon part
+    as a float, as the official ``build_optimizers``: a CUDA graph applies the same learning rate as the eager update."""
 
-    # ---- performance ----
-    amp: str = "bf16"
-    """Autocast dtype of the MLP matmuls, "bf16" or "none" (default "bf16")."""
+    # ---- performance (precision: TF32 matmuls, no autocast) ----
     compile: bool = True
     """Use ``torch.compile`` on the world-model functions (default True)."""
     compile_policy: bool = True
     """``torch.compile`` the imagination step, the reward / termination and the critic-feature functions (default True)."""
     planner_imagination_subset: bool = True
     """Only infer observation-selected planner rows when eta_rew is zero; pad small batches to preserve numerical agreement."""
-    policy_autocast: bool = False
-    """bf16 autocast of the actor MLP in imagination only; collection / play stay fp32 (default False)."""
     checkpoint_imagination: bool = False
     """Gradient checkpointing of every imagination step (recompute in backward): less memory, more compute (default False)."""
     heightmap_resolution: float = 0.05
@@ -301,6 +253,38 @@ class ACPRunnerCfg:
     planner_success_only: bool = True
     """Keep only successful episodes for the planner (paper filter). False: label every episode, a test switch for runs whose tracker
     does not finish clips yet (default True)."""
+    # ---- official HybridRobotics/supermimic: the remaining parameters ----
+    wm_nominal: str = "0.01,0.02,0.1,3.14"
+    """Nominal errors of the Bryson loss on the official gencoord loss blocks: root position [m], root rotation [rad] (rotation matrix x sqrt(1/2)), joint position [rad], joint
+    velocity [rad/s] (official ``WorldModelLearnerCfg``: 0.01 / 0.02 / 0.1 / 3.14; weights 1 / nominal^2; the root velocities are not scored)."""
+    return_horizon: int = 20
+    """Official ``ReturnSampler``: env steps per update of the per-bin values V_b (the per-step discounted returns of every visited bin, bootstrapped from V)."""
+    return_memory: int = 256
+    """``ReturnSampler``: most samples a bin's V remembers."""
+    return_steepness: float = 25.0
+    """``ReturnSampler``: softmax gain on V_b / v_max."""
+    return_explore: float = 0.5
+    """``ReturnSampler``: uniform share of the resets."""
+    return_keep: float = 0.1
+    """``ReturnSampler``: share on the bins in proportion to their summed squared focus."""
+    cuda_graph_wm: bool = False
+    """Capture the world-model gradient step (rollout, loss, backward, clip, optimizer step) as one CUDA graph after a few eager steps (official ``CapturedUpdate``).
+    With ``compile`` the rollout and the loss are compiled in the default mode first and then captured (official: compile, then capture; never "reduce-overhead" inside the
+    capture). Needs no contact-input world model, ``fail_head`` False and ``term_source`` analytic."""
+    cuda_graph_policy: bool = False
+    """Capture the policy update (H-step imagination, return, BPTT backward, gradient clipping, actor optimizer step, critic targets and the critic fit) as one
+    CUDA graph after a few eager updates (:class:`CapturedUpdate`), replacing ~2000 kernel launches per update by one replay. The sampling of the imagination starts stays outside
+    (its outputs are the graph inputs). The captured update is numerically the eager one, except that a non-finite actor gradient norm skips the actor step on the device
+    (restoring parameters and optimizer state) instead of by a host check. Stage 1 only: needs ``cuda_graph_wm``, ``contact_source`` reference without a planner,
+    ``fail_head`` False, ``term_source`` analytic, no wmres / ``imagine_ref_replay_eps`` / ``abpt_one_step_weight`` / ``imagine_link_hazard_eps`` /
+    ``checkpoint_imagination``. ``step_wm`` is compiled in the default mode (the outer graph replaces "reduce-overhead"). Re-recorded when the learning rate changes by more than 0.5 %."""
+    norm_after_collect: bool = False
+    """Update the policy / WM normalizer statistics after the collection of an iteration from the queued real data (official ``_flush_normalization``)."""
+    skip_env_critic_obs: bool = True
+    """Training: the env's "critic" observation group (reference kinematics / contact positions, never read by this runner: the critic features are analytic) is not
+    computed, a zero tensor of its shape is returned (~20 % of a collection step at 2048 envs; no effect on learning)."""
+    return_resume_stats: bool = True
+    """Save / restore the ReturnBins sample counts and effort with the sidecar (the probabilities are rebuilt without a new effort term)."""
     restart_iteration: bool = False
     """Start the iteration count (lr schedule, eta schedules) at 0 after loading a checkpoint: a new stage continues from the weights of the
     previous one (default False)."""

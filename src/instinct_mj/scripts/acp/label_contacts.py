@@ -461,13 +461,23 @@ class ContactLabeler:
     def label(self, motion: dict, terrain: TerrainDistance, params: dict) -> dict:
         return self.finish(self.extract(motion, terrain, params), params)
 
-    def extract(self, motion: dict, terrain: TerrainDistance, params: dict, static_limits: tuple[float, float] | None = None) -> dict:
+    def extract(
+        self, motion: dict, terrain: TerrainDistance, params: dict, static_limits: tuple[float, float] | None = None,
+        *, reference_positions: np.ndarray | None = None, reference_flags: np.ndarray | None = None,
+    ) -> dict:
         """Kinematic replay and terrain queries of the clip (the expensive part, independent of the thresholds of ``finish``): per frame and
         body the min distance, contact speed, contact position and normal, plus the CoM and the footprints (hull of the lowest slice of a
         body) of the bodies near the terrain in the quasi-static frames (``static_limits``: CoM speed / acceleration, default those of
         ``params``; ``finish`` may use tighter ones)."""
         framerate = float(motion["framerate"])
         num_frames, num_bodies = motion["joint_pos"].shape[0], len(CONTACT_LINKS)
+        if (reference_positions is None) != (reference_flags is None):
+            raise ValueError("Reference contact positions and flags must be supplied together")
+        if reference_positions is not None:
+            if reference_positions.shape != (num_frames, num_bodies, 3) or reference_flags.shape != (num_frames, num_bodies):
+                raise ValueError("Reference contacts must match motion length and CONTACT_LINKS order")
+            if not np.isfinite(reference_positions).all():
+                raise ValueError("Non-finite reference contact position")
         foot = np.array([b in FOOT_BODIES for b in CONTACT_BODIES])
         d_on = np.where(foot, params["d_on"], params["d_on_body"])
         d_off = np.where(foot, params["d_off"], params["d_off_body"])
@@ -475,6 +485,8 @@ class ContactLabeler:
         speed = np.zeros((num_frames, num_bodies))
         pos = np.zeros((num_frames, num_bodies, 3))
         normal = np.zeros((num_frames, num_bodies, 3))
+        patch_dist = np.zeros_like(min_dist) if reference_positions is not None else None
+        surface_changed = np.zeros_like(min_dist, dtype=bool) if reference_positions is not None else None
         com = self.center_of_mass(motion)
         v_max, a_max = static_limits or (params["quasi_static_v"], params["quasi_static_a"])
         static = quasi_static(com, framerate, v_max, a_max) if params["support"] else np.zeros(num_frames, bool)
@@ -505,9 +517,29 @@ class ContactLabeler:
                 k = dist.argmin(axis=1)
                 rows = np.arange(end - start)
                 normal[start:end, b] = contact_normal(terrain, pts[rows, k], closest[rows, k], dist[rows, k], tri[rows, k])
+                if reference_positions is not None:
+                    # Keep the source contact region: a force-weighted toe plant must
+                    # not become the centre of the whole sole after a geometric edit.
+                    anchor = reference_positions[start:end, b]
+                    active = reference_flags[start:end, b].astype(bool)
+                    near_anchor = np.linalg.norm(pts - anchor[:, None], axis=-1).argmin(axis=1)
+                    pos[start:end, b][active] = closest[rows, near_anchor][active]
+                    patch_normal = contact_normal(
+                        terrain, pts[rows, near_anchor], closest[rows, near_anchor], dist[rows, near_anchor], tri[rows, near_anchor],
+                    )
+                    normal[start:end, b][active] = patch_normal[active]
+                    patch_dist[start:end, b] = dist[rows, near_anchor]
+                    if active.any():
+                        _, _, original_tri = terrain.query(anchor[active], return_tri=True)
+                        old_n = terrain.normal(original_tri)
+                        new_n = terrain.normal(tri[rows, near_anchor][active])
+                        surface_changed[start:end, b][active] = np.einsum("ij,ij->i", old_n, new_n) < .5
                 for i in np.nonzero(static[start:end] & (min_dist[start:end, b] <= params["support_d"]))[0]:
                     footprint[start + i, b] = _convex_hull_2d(pts[i][dist[i] <= dist[i].min() + SUPPORT_SLICE][:, :2])
-        return dict(framerate=framerate, min_dist=min_dist, speed=speed, pos=pos, normal=normal, com=com, footprint=footprint)
+        result = dict(framerate=framerate, min_dist=min_dist, speed=speed, pos=pos, normal=normal, com=com, footprint=footprint)
+        if reference_positions is not None:
+            result.update(contact_patch_dist=patch_dist, surface_changed=surface_changed)
+        return result
 
     def finish(self, features: dict, params: dict) -> dict:
         """Contact flags (``contact_segments``, then the support completion) and the sidecar arrays from the ``extract`` features."""

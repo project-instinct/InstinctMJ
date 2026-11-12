@@ -184,5 +184,13 @@ class ScanFloorRunningNorm(RunningNorm):
     def std(self):
         return torch.sqrt(torch.maximum(self.var, self.floor**2) + self.eps**2)
 
+    def set_passthrough(self, channels: slice) -> None:
+        """Channels that are already normalized (e.g. the DR context by its DR ranges, official supermimic ``SimContext``) pass unchanged: mean 0, std 1."""
+        keep = torch.zeros_like(self.floor, dtype=torch.bool)
+        keep[channels] = True
+        self.register_buffer("passthrough", keep, persistent=False)
+
     def forward(self, x):
-        return (x - self.mean) / self.std()
+        y = (x - self.mean) / self.std()
+        keep = getattr(self, "passthrough", None)
+        return y if keep is None else torch.where(keep, x, y)

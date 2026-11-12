@@ -73,7 +73,9 @@ class TerrainMotion(AmassMotion):
                 terrain_idx = int(
                     min(max(difficulty * len(self.yaml_data["terrains"]), 0), len(self.yaml_data["terrains"]) - 1)
                 )
-                terrain_id_to_origins[terrain_idx].append(terrain.terrain_origins[row_idx, col_idx])
+                # The generator selects by list position; curated datasets can retain non-contiguous IDs.
+                terrain_id = int(self.yaml_data["terrains"][terrain_idx]["terrain_id"])
+                terrain_id_to_origins[terrain_id].append(terrain.terrain_origins[row_idx, col_idx])
 
         # Set the origins for each motion by _all_motion_terrain_ids.
         for terrain_id, origins in terrain_id_to_origins.items():

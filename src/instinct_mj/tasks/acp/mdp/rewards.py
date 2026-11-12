@@ -274,13 +274,14 @@ class contact_acc(ManagerTermBase):
             acc = (vel - self.prev_vel) / env.step_dt
             self.prev_vel[:] = vel
             self.num_samples += 1
-            acc = acc * (self.num_samples >= 2).float().view(-1, 1, 1)  # the difference needs two velocities of the current episode
+            # the difference needs two velocities of the current episode (a select, not a product: the stored velocity of a blown-up episode is non-finite)
+            acc = torch.where((self.num_samples >= 2).view(-1, 1, 1), acc, 0.0)
             return acc.norm(dim=-1).sum(-1).clamp(max=max_value)
         pos = self.robot.data.body_link_pos_w[:, self.contact_body_ids]
         acc = (pos - 2.0 * self.prev_pos + self.prev_prev_pos) / env.step_dt**2
         self.prev_prev_pos[:] = self.prev_pos
         self.prev_pos[:] = pos
         self.num_samples += 1
-        # the second difference needs three positions of the current episode
-        acc = acc * (self.num_samples >= 3).float().view(-1, 1, 1)
+        # the second difference needs three positions of the current episode (a select, as above)
+        acc = torch.where((self.num_samples >= 3).view(-1, 1, 1), acc, 0.0)
         return acc.norm(dim=-1).sum(-1).clamp(max=max_value)

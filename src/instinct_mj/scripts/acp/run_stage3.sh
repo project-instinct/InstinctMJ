@@ -4,14 +4,15 @@
 # Task Instinct-ACP-Stage3-G1-v1, runner ACPStage3Runner / G1AcpStage3RunnerCfg. Every agent parameter is spelled out below (nothing is left to the config defaults); a trailing
 # "# != config default" marks the values this stage sets differently from the dataclass default.
 # Starts from a Stage 2 checkpoint (STAGE2_CKPT=<abs path of model_<it>.pt of a g1AcpStage2V1 run: actor, normalizer, world model, critic Vm, termination head,
-# planner) and counts its iterations from 0. The Stage 3 runner does not support the clip-end options of Stage 1 / 2 (--imagine-past-clip-end /
-# --clip-end-bootstrap: its returns do not implement their masks), so they are off here (the reference envs start at phase 0 and have to reach 90 % of the clip).
-# Resume a stopped Stage 3 run with RESUME_CKPT.
+# planner) and counts its iterations from 0. The loop is the official HybridRobotics/supermimic (see run_stage1.sh); both critics (Vm, Vfs) are LN + GELU MLPs on raw features, trained with
+# Muon + fused Adam, with targets clamped at the analytic bound of their own objective. The Stage 3 runner does not implement the Track options (start sampling, stop-gradient terms,
+# replay / hazard / injection, ...). Resume a stopped Stage 3 run with RESUME_CKPT.
 # Environment: ACP_DATASET (motion folder), NUM_ENVS, MAX (iterations), SAVE_INTERVAL, EXPERIMENT_NAME, UNIT (systemd unit), MEMORY_MAX, STAGE2_CKPT (required).
+# COMPILE (default True), CUDA_GRAPH_WM (default True), CUDA_GRAPH_POLICY (default True), NORM_AFTER_COLLECT.
 # ACP_FOREGROUND=1 runs in the foreground (no systemd) instead of `systemd-run --user`.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../../.."
-ACP_DATASET="${ACP_DATASET:-/home/duanxin/Datasets/acp/v3_train11}"
+ACP_DATASET="${ACP_DATASET:-/home/duanxin/Datasets/acp/v4_train_natural_20261110_v1}"
 export ACP_DATASET
 [ -f "$ACP_DATASET/metadata.yaml" ] || { echo "ACP_DATASET=$ACP_DATASET has no metadata.yaml (dataset not built yet?)" >&2; exit 1; }
 UNIT="${UNIT:-acp-s3-v1}"
@@ -23,16 +24,16 @@ CKPT_ARGS=(--agent.load-run "$(dirname -- "$CKPT")" --agent.load-checkpoint "$(b
 ENV_ARGS=(--env.contact-detect force_head --env.sim.mujoco.iterations 10 --env.sim.mujoco.ls-iterations 20)
 AGENT_ARGS=(
   --agent.buffer-steps 1000
-  --agent.utd 0.4
+  --agent.replay-ratio 16   # official supermimic Ratio: utd = num_envs * 16 / (wm_batches * wm_batch * wm_window) = 0.4 at 4096 envs
   --agent.warmup-steps 64
   --agent.hist 5
   --agent.wm-window 8
   --agent.wm-batches 10
   --agent.wm-batch 2048
-  --agent.wm-failure-frac 0.0   # != config default; uniform world-model windows, supermimic_vibed
+  --agent.wm-failure-frac 0.0   # != config default; head windows only (the world model trains on complete windows)
   --agent.wm-failure-horizon 16
   --agent.wm-balance-frac 0.0
-  --agent.wm-holdout-envs 0.0   # != config default; every env trains the world model, supermimic_vibed
+  --agent.wm-holdout-envs 0.0   # != config default; every env trains the world model
   --agent.wm-only-iters 0
   --agent.wm-physics-inputs ""
   --agent.wm-ref-contacts False
@@ -46,24 +47,15 @@ AGENT_ARGS=(
   --agent.fail-pos-weight 1.0
   --agent.horizon 32
   --agent.pi-batch 2048   # != config default
-  --agent.imagine-past-clip-end False
-  --agent.clip-end-bootstrap False
-  --agent.reset-sampling bins
-  --agent.bins-v2 False
-  --agent.bins-difficulty-k 0.0
-  --agent.clip-end-exact-last False
   --agent.failure-window-fix False
   --agent.scan-slope-gradient False
-  --agent.soft-term-tau-dist 0.02
-  --agent.soft-term-tau-tilt 0.04
   --agent.imagine-clamp-joints False   # != config default
-  --agent.term-source analytic   # supermimic_vibed: sigmoid of the env thresholds (height tau 0.02 m, tilt tau 0.04)
-  --agent.clip-end-v2 False
+  --agent.term-source analytic   # the normalized sigmoid of the env thresholds (soft-term-softness)
   --agent.start-balance-frac 0.0
   --agent.start-sampling uniform
   --agent.gamma 0.99
   --agent.lam 0.95
-  --agent.action-noise 0.1   # x the per-joint SuperMimic action scale (0.035-0.055 rad), supermimic_vibed
+  --agent.action-noise 0.1   # x the per-joint SuperMimic action scale (0.035-0.055 rad)
   --agent.geo-contact False
   --agent.geo-contact-d0 0.008
   --agent.geo-contact-tau 0.008
@@ -85,7 +77,6 @@ AGENT_ARGS=(
   --agent.critic-minibatches 4
   --agent.critic-hidden 256,128
   --agent.no-critic False
-  --agent.value-max 0.0
   --agent.wmres-cut False
   --agent.wmres-cut-theta 0.5
   --agent.wmres-cut-flux 0.0
@@ -94,13 +85,9 @@ AGENT_ARGS=(
   --agent.wmres-cut-max-frac 0.9
   --agent.wmres-cap-clips ""
   --agent.lr 0.0002
-  --agent.lr-decay-iters 250000
-  --agent.lr-final-ratio 0.03
-  --agent.amp bf16
-  --agent.compile True
+  --agent.compile "${COMPILE:-True}"   # default-mode compiled rollout + loss, captured by the world-model graph (official: compile, then capture)
   --agent.compile-policy True
   --agent.planner-imagination-subset True
-  --agent.policy-autocast False
   --agent.checkpoint-imagination False
   --agent.heightmap-resolution 0.05
   --agent.exact-scan True
@@ -119,6 +106,17 @@ AGENT_ARGS=(
   --agent.planner-ref-tile-capacity 5000
   --agent.planner-success-only True
   --agent.restart-iteration True
+  --agent.wm-nominal 0.01,0.02,0.1,3.14   # Bryson nominal errors: root position, root rotation, joint position, joint velocity (official)
+  --agent.soft-term-softness 0.05   # official: one normalized sigmoid, sigmoid((max_i e_i / theta_i - 1) / 0.05)
+  --agent.return-horizon 20
+  --agent.return-memory 256
+  --agent.return-steepness 25.0
+  --agent.return-explore 0.5
+  --agent.return-keep 0.1
+  --agent.cuda-graph-wm "${CUDA_GRAPH_WM:-True}"   # the world-model gradient step as one CUDA graph (official CapturedUpdate)
+  --agent.cuda-graph-policy "${CUDA_GRAPH_POLICY:-True}"   # the Stage 3 policy update (both regimes, both critics, the return scales) as one CUDA graph; the sampling of the starts stays eager
+  --agent.norm-after-collect "${NORM_AFTER_COLLECT:-False}"   # True: normalizer statistics after the collection of an iteration (official _flush_normalization)
+  --agent.return-resume-stats True
   --agent.onnx-deploy-joint-order False
   --agent.vfs-lr 0.001
   --agent.vfs-warmup-iters 500

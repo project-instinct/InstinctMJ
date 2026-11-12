@@ -17,8 +17,9 @@ class ResetBins:
     uniform in [bin start, min(bin start + bin_frames, last frame)). The clip goes through the motion buffer's own sampling (terrain origin, tile): its weights
     are the clip marginals of p_b and ``set_start_phase`` then draws the bin of the chosen clip with p_b restricted to it, which is exactly the joint p_b.
 
-    ``v2`` (runner option ``bins_v2``): the bins cover the valid start frames 0 .. T-2 and a tail bin of less than ``bin_frames / 2`` frames is merged into the previous one.
-    ``difficulty_k`` (runner option ``bins_difficulty_k``): the uniform half is weighted by 1 + k f_c, f_c being the running failure rate of the clip (``update_clip_failures``).
+    ``v2``: the bins cover the valid start frames 0 .. T-2 and a tail bin of less than ``bin_frames / 2`` frames is merged into the previous one (:class:`ReturnBins` uses it).
+    ``difficulty_k``: the uniform half is weighted by 1 + k f_c, f_c being the running failure rate of the clip (``update_clip_failures``).
+    The SuperMimic ACP runner uses only the subclass :class:`ReturnBins`; this class is its base (bin layout, start-frame draw).
     """
 
     def __init__(self, motion_buffer: TerrainMotion, num_envs: int, device, max_return: float, v2: bool = False, difficulty_k: float = 0.0):
@@ -80,3 +81,93 @@ class ResetBins:
         frame = self.bin_first[bins] + (torch.rand(len(env_ids), device=self.device) * self.bin_size[bins].float()).long()  # (at least one frame before the clip end)
         assigned_ids = self.motion_buffer.env_ids_to_assigned_ids(env_ids)
         self.motion_buffer.motion_buffer_start_time_s[assigned_ids] = (frame.float() + 0.01) / self.clip_fps[motion_ids]  # (+0.01: the float time floors to this frame)
+
+
+class ReturnBins(ResetBins):
+    """The official HybridRobotics/supermimic ``ReturnSampler`` (runners/reset_sampling.py) on the 1 s bins of :class:`ResetBins` (``v2`` layout: every bin has >= 1 start
+    frame). Every ``horizon`` env steps the buffered per-step rewards turn into discounted returns (lambda 1, backwards), which continue where an episode ends with the value
+    of the state after the step: 0 after a fall, the mean V after the clip end, V of the next frame's bin after a time-out or at the buffer end. Each env's visits to one bin
+    within one episode give one sample (their mean return); V_b is the exact mean of a bin's first ``memory`` samples, older samples then count as ``memory``. Reset distribution:
+    explore / B + (1 - explore - keep) softmax(-steepness V / v_max) + keep effort / sum(effort), effort = the summed square of each bin's focus. Unmeasured bins read v_max."""
+
+    def __init__(self, motion_buffer, num_envs: int, device, max_return: float, gamma: float = 0.99, horizon: int = 20, memory: int = 256, steepness: float = 25.0,
+                 explore: float = 0.5, keep: float = 0.1):
+        super().__init__(motion_buffer, num_envs, device, max_return, v2=True, difficulty_k=0.0)
+        self.gamma = gamma
+        assert explore + keep < 1.0, "explore + keep must leave room for the focus"
+        self.horizon, self.memory, self.steepness, self.explore, self.keep = horizon, memory, steepness, explore, keep
+        nb = len(self.bin_clip)
+        self.num_bins_clip = torch.bincount(self.bin_clip, minlength=self.num_clips)
+        self.bin_offset = torch.cumsum(self.num_bins_clip, 0) - self.num_bins_clip
+        self.value = torch.full((nb,), float(max_return), device=device)
+        self.bin_G = self.value  # the same tensor: the logs and the sidecar (by clip and bin index) read / restore V_b as G_b
+        self.count = torch.zeros(nb, device=device)
+        self.effort = torch.zeros(nb, dtype=torch.float64, device=device)
+        shape = (num_envs, horizon)
+        self._bins_buf = torch.zeros(shape, dtype=torch.long, device=device)
+        self._next_bins = torch.zeros(shape, dtype=torch.long, device=device)
+        self._rewards = torch.zeros(shape, device=device)
+        self._terminated = torch.zeros(shape, dtype=torch.bool, device=device)
+        self._clip_end = torch.zeros(shape, dtype=torch.bool, device=device)
+        self._timed_out = torch.zeros(shape, dtype=torch.bool, device=device)
+        self._step = 0
+
+    def bin_of(self, clip: torch.Tensor, local_frame: torch.Tensor) -> torch.Tensor:
+        """Bin of a clip-local frame (frames past the last bin's range count to the last bin)."""
+        b = torch.minimum(local_frame.clamp(min=0) // self.bin_frames, self.num_bins_clip[clip] - 1)
+        return self.bin_offset[clip] + b
+
+    def record(self, clip: torch.Tensor, local_frame: torch.Tensor, next_local_frame: torch.Tensor, reward: torch.Tensor, terminated: torch.Tensor, clip_end: torch.Tensor,
+               timed_out: torch.Tensor) -> None:
+        """Buffer one env step (the frame before the step, the reward, how the episode ended, if it did); every ``horizon`` steps update V and the reset distribution."""
+        col = self._step
+        self._bins_buf[:, col] = self.bin_of(clip, local_frame)
+        self._next_bins[:, col] = self.bin_of(clip, next_local_frame)
+        self._rewards[:, col] = torch.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
+        self._terminated[:, col], self._clip_end[:, col], self._timed_out[:, col] = terminated, clip_end, timed_out
+        self._step += 1
+        if self._step < self.horizon:
+            return
+        self._step = 0
+        self._update()
+        self._distribution()
+
+    def _dones(self) -> torch.Tensor:
+        return self._terminated | self._clip_end | self._timed_out
+
+    def _returns(self, gamma: float) -> torch.Tensor:
+        next_value = torch.where(self._terminated, 0.0, torch.where(self._clip_end, self.value.mean(), self.value[self._next_bins]))
+        dones = self._dones()
+        returns = torch.empty_like(self._rewards)
+        next_return = next_value[:, -1]
+        for t in reversed(range(self.horizon)):
+            next_return = torch.where(dones[:, t], next_value[:, t], next_return)
+            returns[:, t] = self._rewards[:, t] + gamma * next_return
+            next_return = returns[:, t]
+        return returns
+
+    def _update(self) -> None:
+        returns = self._returns(self.gamma)
+        dones = self._dones()
+        num_envs, horizon = dones.shape
+        nb = len(self.bin_clip)
+        episode = torch.cumsum(dones.long(), dim=1) - dones.long()
+        envs = torch.arange(num_envs, device=dones.device).unsqueeze(1)
+        key = (envs * horizon + episode) * nb + self._bins_buf
+        keys, inverse, visits = torch.unique(key.reshape(-1), return_inverse=True, return_counts=True)
+        samples = torch.zeros(keys.numel(), device=returns.device).scatter_add_(0, inverse, returns.reshape(-1)) / visits
+        bins = keys % nb
+        new = torch.zeros_like(self.count).scatter_add_(0, bins, torch.ones_like(samples))
+        total = torch.zeros_like(self.value).scatter_add_(0, bins, samples)
+        self.count = self.count.clamp(max=self.memory) + new
+        self.value.copy_(torch.where(new > 0, self.value + (total - new * self.value) / self.count.clamp(min=1), self.value))
+
+    def _distribution(self) -> None:
+        focus = torch.softmax(-self.steepness * self.value / self.max_return, dim=0)
+        self.effort += focus.double().square()
+        keep = (self.effort / self.effort.sum()).float()
+        self.bin_p = self.explore / len(self.bin_clip) + (1.0 - self.explore - self.keep) * focus + self.keep * keep
+
+    def update_probabilities(self) -> None:
+        """Clip weights of the motion buffer from the current bin distribution (updated by ``record``)."""
+        self.motion_buffer._motion_weights[:] = torch.zeros(self.num_clips, device=self.device).index_add_(0, self.bin_clip, self.bin_p)

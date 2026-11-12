@@ -55,7 +55,7 @@ def main() -> None:
     runner.setup_training()
     stats = {k: [] for k in ("r", "ep_len", "term", "done", "jl_soft", "rec_episodes", "rec_samples")}
     runner.collect(agent["warmup_steps"], stats)
-    steps_per_iter = 1.0 / agent["utd"]
+    steps_per_iter = 1.0 / runner.utd
     acc = {"collect": 0.0, "wm_update": 0.0, "policy_update": 0.0}
     total = 0.0
     prof = None
@@ -107,7 +107,7 @@ def main() -> None:
             prof = profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA])
             prof.__enter__()
         t0 = time.time()
-        n = 2 if i % 2 == 0 else 3  # utd 0.4: 2.5 simulator steps per iteration
+        n = 2 if i % 2 == 0 else 3  # replay ratio 16 at 4096 envs: utd 0.4, 2.5 simulator steps per iteration
         _, tc = timed(runner.collect, n, stats)
         _, tw = timed(lambda: [runner.wm_update() for _ in range(agent["wm_batches"])])
         _, tp = timed(runner.policy_update)

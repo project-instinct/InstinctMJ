@@ -9,7 +9,7 @@ from instinct_mj.rl.supermimic.terrain import HeightScanner, load_or_build_heigh
 from instinct_mj.tasks.acp.mdp.rewards import measured_contact_flags
 
 from .kinematics import ACPKinematics
-from .mdp import NUM_J, XI_ARM, XI_COM, XI_FRIC, XI_KD, XI_KP, XI_MASS, XI_STATIC, XI_STATIC_DIM, ACPMDP
+from .mdp import NUM_J, XI_ARM, XI_BIAS, XI_COM, XI_DIM, XI_FRIC, XI_KD, XI_KP, XI_LAG, XI_MASS, XI_STATIC, XI_STATIC_DIM, ACPMDP
 from .motion import ACPMotion
 from .rays import ExactHeightScanner
 from .planner import CONTACT_LINKS, TRACKED_LINKS
@@ -85,6 +85,72 @@ class ACPSimReader(SimReader):
         xi[:, XI_ARM] = model.dof_armature[:, dofs] / torch.as_tensor(mj.dof_armature[dofs.cpu().numpy()], device=dev, dtype=torch.float32)
         xi[:, XI_FRIC] = model.geom_friction[:, mdp.collision_geom_ids[:1], 0]
         return xi[:, XI_STATIC]
+
+
+DEGENERATE_HALF_WIDTH = 1e-3  # official supermimic sim_context: half-widths at or below this are constant channels (scale 1, no float-noise amplification)
+
+
+def dr_range_xi_stats(reader: "ACPSimReader") -> tuple[torch.Tensor, torch.Tensor]:
+    """(mean, scale) (XI_DIM,) of the context from the DR ranges of the env's events (official supermimic ``SimContext``: range midpoint / half-width,
+    half-widths <= 1e-3 get scale 1), in the units ``static_context`` / ``dynamic_context`` report: encoder bias [rad], torso CoM offset [m], kp / kd / mass /
+    armature over nominal, friction (absolute), action delay [physics steps]. An event that is absent leaves its channels at the nominal value (half-width 0)."""
+    env, robot = reader.env, reader.robot
+    events = env.cfg.events
+    lo, hi = torch.zeros(XI_DIM), torch.zeros(XI_DIM)
+    lo[XI_KP] = hi[XI_KP] = lo[XI_KD] = hi[XI_KD] = lo[XI_MASS] = hi[XI_MASS] = lo[XI_ARM] = hi[XI_ARM] = 1.0
+
+    def rng(slc, a, b):
+        lo[slc], hi[slc] = float(a), float(b)
+
+    joint_names = list(robot.joint_names)
+    ids = env.action_manager.get_term("joint_pos").target_ids.tolist()  # robot joint indices, as ``dynamic_context`` (bias[:, ids] = encoder_bias[:, ids])
+    import re
+    for name in ("joint_zero_bias", "ankle_zero_bias"):
+        ev = events.get(name)
+        if ev is None:
+            continue
+        patterns = ev.params["asset_cfg"].joint_names
+        patterns = (patterns,) if isinstance(patterns, str) else tuple(patterns)
+        b_lo, b_hi = ev.params["bias_range"]
+        for j in ids:
+            if any(re.match(p_, joint_names[j]) for p_ in patterns):
+                lo[XI_BIAS.start + j], hi[XI_BIAS.start + j] = float(b_lo), float(b_hi)
+    if (ev := events.get("base_com")) is not None:
+        for k, axis in enumerate("xyz"):
+            a, b = ev.params["com_range"].get(axis, (0.0, 0.0))
+            lo[XI_COM.start + k], hi[XI_COM.start + k] = float(a), float(b)
+    if (ev := events.get("randomize_actuator_gains")) is not None:
+        assert ev.params.get("operation", "scale") == "scale"
+        rng(XI_KP, *ev.params["kp_range"])
+        rng(XI_KD, *ev.params["kd_range"])
+    mass_ids, mass_names = robot.find_bodies(["torso_link", ".*_hip_.*_link", ".*_knee_link", ".*_ankle_.*_link"])
+    if (ev := events.get("torso_added_mass")) is not None:
+        assert ev.params.get("operation") == "add"
+        torso = int(robot.indexing.body_ids[robot.body_names.index("torso_link")])
+        m0 = float(env.sim.mj_model.body_mass[torso])
+        k = mass_names.index("torso_link")
+        a, b = ev.params["ranges"]
+        lo[XI_MASS.start + k], hi[XI_MASS.start + k] = 1.0 + a / m0, 1.0 + b / m0
+    if (ev := events.get("leg_link_mass")) is not None:  # pseudo_inertia: mass scale exp(2 alpha), alpha drawn so that the scale is uniform
+        import math
+        a, b = ev.params["alpha_range"]
+        for k, n_ in enumerate(mass_names):
+            if n_ != "torso_link":
+                lo[XI_MASS.start + k], hi[XI_MASS.start + k] = math.exp(2 * a), math.exp(2 * b)
+    if (ev := events.get("joint_armature")) is not None:
+        assert ev.params.get("operation") == "scale"
+        rng(XI_ARM, *ev.params["ranges"])
+    if (ev := events.get("physics_material")) is not None:
+        assert ev.params.get("operation") == "abs"
+        rng(XI_FRIC, *ev.params["ranges"][0])
+    else:
+        lo[XI_FRIC] = hi[XI_FRIC] = float(env.sim.mj_model.geom_friction[0, 0])
+    if reader.has_delay:
+        cfg = robot.actuators[0].cfg
+        rng(XI_LAG, getattr(cfg, "delay_min_lag", 0), getattr(cfg, "delay_max_lag", 0))
+    half = (hi - lo) / 2
+    scale = torch.where(half > DEGENERATE_HALF_WIDTH, half, torch.ones_like(half))
+    return ((lo + hi) / 2).to(env.device), scale.to(env.device)
 
 
 def make_kinematics(env, manager, motion: ACPMotion, device: str) -> ACPKinematics:

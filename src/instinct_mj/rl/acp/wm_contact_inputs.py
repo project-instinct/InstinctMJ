@@ -4,7 +4,6 @@ The first linear layer retains the old contiguous weight and evaluates new zero 
 as a separate GEMM, preserving the old forward function at warm start (including bf16).
 """
 from __future__ import annotations
-import copy
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -38,9 +37,9 @@ class ContactRunningNorm(ScanFloorRunningNorm):
             self.var[self.ar_slice]=1
 
 class ContactInputWorldModel(WorldModel):
-    def __init__(self,context_dim,num_contact,xi_dim,*,spec,num_joints=23,no_scan=False,bridge_updates=100):
+    def __init__(self,context_dim,num_contact,xi_dim,*,spec,num_joints=23,no_scan=False,bridge_updates=100,act=nn.SiLU):
         self.contact_spec=parse(spec);self.extra_dim=sum(DIMS[p] for p in self.contact_spec)
-        super().__init__(context_dim+self.extra_dim,num_contact,xi_dim,0,num_joints=num_joints)
+        super().__init__(context_dim+self.extra_dim,num_contact,xi_dim,0,num_joints=num_joints,act=act)
         self.old_in_dim=self.in_dim-self.extra_dim
         self.net[0]=ExtraLinear(self.old_in_dim,self.extra_dim,self.net[0].out_features)
         scan_start=self.old_in_dim-context_dim+1  # the context starts with the pelvis height
@@ -71,19 +70,12 @@ class ContactInputWorldModel(WorldModel):
         self.use_scan=not self.no_scan or self._updates<self.bridge_updates
 
     def load_optimizer(self,opt,state):
-        named=list(self.named_parameters());ids=opt.state_dict()['param_groups'][0]['params']
-        if len(state['param_groups'][0]['params'])==len(named):opt.load_state_dict(state);return
-        old_ids=state['param_groups'][0]['params'];old_named=[(i,p) for i,(n,p) in zip(ids,named) if n!='net.0.extra_weight']
-        assert len(old_ids)==len(old_named)
-        mapped={newid:copy.deepcopy(state['state'][oldid]) for oldid,(newid,p) in zip(old_ids,old_named) if oldid in state['state']}
-        ref=next(iter(mapped.values()),None)
-        if ref is not None:
-            for newid,(name,p) in zip(ids,named):
-                if name=='net.0.extra_weight':
-                    mapped[newid]=dict(step=torch.zeros_like(ref['step']),exp_avg=torch.zeros_like(p),exp_avg_sq=torch.zeros_like(p))
-        groups=copy.deepcopy(state['param_groups']);groups[0]['params']=ids
-        opt.load_state_dict(dict(state=mapped,param_groups=groups))
-        for v in opt.state.values():v['step']=v['step'].cpu()
+        """Resume the optimizer of this world model; the state of a world model without the extra input columns (another parameter list) cannot be mapped onto the Muon + Adam
+        optimizer, so the optimizer then starts fresh (the weights are migrated by ``load_compatible``)."""
+        try:
+            opt.load_state_dict(state)
+        except (ValueError,KeyError,RuntimeError) as e:
+            print(f'[resume] world-model optimizer state not loaded ({type(e).__name__}): the optimizer starts fresh',flush=True)
 
     def advance(self):
         self._updates+=1;self.contact_updates.fill_(self._updates)

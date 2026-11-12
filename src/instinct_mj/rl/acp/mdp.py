@@ -55,11 +55,6 @@ XI_STATIC_DIM = 3 * NUM_J + 17
 XI_LAG = slice(4 * NUM_J + 17, 4 * NUM_J + 18)
 XI_DIM = 4 * NUM_J + 18
 XI_DYN_DIM = NUM_J + 1  # encoder bias + lag
-XI_FLOOR = torch.cat((torch.full((NUM_J,), 5e-3), torch.full((3,), 1e-2), torch.full((2 * NUM_J,), 0.02), torch.full((13,), 0.02),
-                      torch.full((NUM_J,), 0.02), torch.full((1,), 0.05), torch.full((1,), 0.5)))  # fmt: skip
-# per-component floors on the world-model error normalization (pos, rot, lin vel, ang vel, q, qd increments)
-ERR_FLOOR = torch.cat((torch.full((3,), 3e-3), torch.full((3,), 5e-3), torch.full((3,), 2e-2), torch.full((3,), 5e-2),
-                       torch.full((NUM_J,), 3e-3), torch.full((NUM_J,), 5e-2)))  # fmt: skip
 
 
 def make_xi(static: torch.Tensor, dyn: torch.Tensor) -> torch.Tensor:
@@ -112,7 +107,7 @@ class ACPMDP:
         self.violation_sdf = get_violation_sdf(env)  # exact torso-terrain distance of the contact_violation termination
         self.contact_acc_vel = self.p["contact_acc"].get("mode", "pos2") == "vel1"  # contact_acc from the link velocities: ``lp_hist`` carries the velocities of the states -1 and 0
         self.stopgrad: tuple[str, ...] = ()  # reward terms whose gradient is cut in ``reward`` (the runner sets it from ``bptt_stopgrad_terms``)
-        self.soft_tz, self.soft_tt = 0.02, 0.04  # temperatures of the soft terminations (the runner sets them from soft_term_tau_dist / soft_term_tau_tilt)
+        self.soft_softness = 0.05  # softness of the imagined termination sigmoid (the runner sets it from soft_term_softness; official supermimic 0.05)
         self.tp = {n: tm.get_term_cfg(n).params for n in ("base_pos_too_far", "base_pg_too_far", "base_xy_too_far", "foot_pos_too_far")}  # the v1 failure terminations
         self.num_track = motion.track_p.shape[1]  # the SuperMimic tracked bodies (the contact links first); the kinematics evaluate all of them
         # nominal joint data (xi carries the per-env encoder bias)
@@ -164,15 +159,10 @@ class ACPMDP:
         self.odo_dt = sensor_cfg.history_dt
         self.decimation, self.physics_dt = env.cfg.decimation, env.physics_dt
         self.xi_dim = XI_DIM
-        self.xi_mean = torch.zeros(XI_DIM, device=device)
+        self.xi_mean = torch.zeros(XI_DIM, device=device)  # the DR-range encoding of the context (``sim.dr_range_xi_stats``; set by the runner)
         self.xi_scale = torch.ones(XI_DIM, device=device)
 
     # ---------------- sim context ----------------
-    def set_xi_stats(self, table: torch.Tensor) -> None:
-        """Fixed normalization of the per-env context from the DR sample at setup."""
-        self.xi_mean = table.mean(0)
-        self.xi_scale = torch.maximum(table.std(0, correction=0), XI_FLOOR.to(table.device))
-
     def normalize_xi(self, xi: torch.Tensor) -> torch.Tensor:
         return (xi - self.xi_mean) / self.xi_scale
 
@@ -503,21 +493,28 @@ class ACPMDP:
     def hard_termination(self, S, f, origin, phase) -> torch.Tensor:
         return torch.stack([v > 0 for v in self.termination(S, f, origin, phase).values()], -1).any(-1)
 
-    def soft_termination(self, S, f, origin, phase, tz: float | None = None, tt: float | None = None, fk=None) -> torch.Tensor:
-        """Differentiable termination probability for imagined rollouts (the per-step hazard of every term is sigmoid((error - threshold) / tau), ``soft_tz`` for the distances, ``soft_tt`` for the tilt).
-        ``fk``: ``kin.forward_all(*S)`` (or ``kin.forward``) when the caller has it already."""
-        tz, tt = self.soft_tz if tz is None else tz, self.soft_tt if tt is None else tt
+    def soft_termination(self, S, f, origin, phase, softness: float | None = None, fk=None) -> torch.Tensor:
+        """Differentiable termination probability for imagined rollouts (official supermimic ``WorldModelEnv._compute_term_prob``): ONE sigmoid of the largest
+        threshold-normalized error of the failure terminations, ``sigmoid((max_i e_i / theta_i - 1) / softness)`` (0.5 exactly at a threshold), combined with the
+        smooth hazard of the contact-violation termination. ``fk``: ``kin.forward_all(*S)`` (or ``kin.forward``) when the caller has it already."""
+        softness = self.soft_softness if softness is None else softness
         fk = self.kin.forward_all(*S) if fk is None else fk
         bp, bR = fk[:2]
         e_z = self.pelvis_height_error(bp, f, origin)
         e_pg = self.projected_gravity_error(bR, f)
-        alive = 1 - torch.sigmoid((e_z - self.tp["base_pos_too_far"]["distance_threshold"]) / tz)
-        alive = alive * (1 - torch.sigmoid((e_pg - self.tp["base_pg_too_far"]["projected_gravity_threshold"]) / tt))
         e_xy, e_foot = self.tracking_errors(bp, f, origin)
-        alive = alive * (1 - torch.sigmoid((e_xy - self.tp["base_xy_too_far"]["distance_threshold"]) / tz))
-        alive = alive * (1 - torch.sigmoid((e_foot - self.tp["foot_pos_too_far"]["distance_threshold"]) / tz))
+        tp = self.tp
+        worst = torch.maximum(torch.maximum(e_z / tp["base_pos_too_far"]["distance_threshold"], e_pg / tp["base_pg_too_far"]["projected_gravity_threshold"]),
+                              torch.maximum(e_xy / tp["base_xy_too_far"]["distance_threshold"], e_foot / tp["foot_pos_too_far"]["distance_threshold"]))
+        alive = 1 - torch.sigmoid((worst - 1.0) / softness)
         alive = alive * (1 - torch.sigmoid((VIOLATION_D - self.violation_distance(S, fk)) / VIOLATION_TAU) * self.violation_active(f, origin).float())
         return 1 - alive
+
+    def max_step_reward(self, eta_rew: float, names=None) -> float:
+        """Largest per-step reward of the imagined objective at ``eta_rew``: the sum of the positive reward weights x dt (``names``: the terms the objective
+        contains, default all of the env's). The discounted value of the objective is bounded by this / (1 - gamma) (official ``ActorCriticPolicyLearner._v_max``)."""
+        w = self.weights(eta_rew)
+        return sum(max(float(w[n]), 0.0) for n in (w if names is None else names)) * self.dt
 
     # ---------------- critic ----------------
     def critic_features(self, S, f, phase, origin, xi_n, goal_pos, goal_yaw, fk=None) -> torch.Tensor:

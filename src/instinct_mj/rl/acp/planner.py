@@ -60,6 +60,15 @@ class AttentionContactPlanner(nn.Module):
         self.occ_head = _mlp([d + 64, 512, 512, 512, 1])
 
     def forward(self, proprio: torch.Tensor, goal: torch.Tensor, points: torch.Tensor) -> dict[str, torch.Tensor]:
+        fn = self.__dict__.get("_compiled_forward")
+        return fn(proprio, goal, points) if fn is not None else self.forward_eager(proprio, goal, points)
+
+    def compile_forward(self) -> None:
+        """Training / imagination: ``forward`` runs a ``torch.compile``d ``forward_eager`` (same math; batch sizes vary, so dynamic shapes). The uncompiled
+        forward stays the default (ONNX export, play)."""
+        self.__dict__["_compiled_forward"] = torch.compile(self.forward_eager, dynamic=True)
+
+    def forward_eager(self, proprio: torch.Tensor, goal: torch.Tensor, points: torch.Tensor) -> dict[str, torch.Tensor]:
         """proprio (B, 375), goal (B, 3), points (B, 187, 3) encoded (x, y, z_enc) -> alpha (B, 9, 187), occ_logit (B, 9).
 
         The CNN sees the z_enc channel as (11, 17) (y rows, x cols), following the paper intent; the authors' export
@@ -73,9 +82,25 @@ class AttentionContactPlanner(nn.Module):
         s = self.shared_mlp(torch.cat([proprio, goal, pooled], dim=-1))  # (B, d)
         gamma, beta = self.film(self.body_embed).chunk(2, dim=-1)  # (9, d) each
         query = gamma[None] * s[:, None] + beta[None]  # (B, 9, d)
-        att, alpha = self.attn(query, feat, feat, need_weights=True, average_attn_weights=True)
+        att, alpha = self.attend(query, feat)
         occ_logit = self.occ_head(torch.cat([att, pooled[:, None].expand(-1, NUM_BODIES, -1)], dim=-1)).squeeze(-1)
         return dict(alpha=alpha, occ_logit=occ_logit)
+
+    def attend(self, query: torch.Tensor, feat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """``self.attn(query, feat, feat, need_weights=True, average_attn_weights=True)`` with the same parameters (the module's in / out projections), as
+        broadcast multiply-sums: with 32 heads of size 3 the batched GEMMs of ``nn.MultiheadAttention`` are tiny and slow (14.8 ms of a 19.5 ms forward at
+        B = 2048 on a 3090); this form, compiled (``compile_forward``), fuses into a few kernels (4 ms), equal up to float rounding."""
+        a = self.attn
+        d, h = a.embed_dim, a.num_heads
+        hd = d // h
+        W, b = a.in_proj_weight, a.in_proj_bias
+        B = query.shape[0]
+        Q = F.linear(query, W[:d], b[:d]).view(B, -1, h, hd).transpose(1, 2)  # (B, h, 9, hd)
+        K = F.linear(feat, W[d : 2 * d], b[d : 2 * d]).view(B, -1, h, hd).transpose(1, 2)  # (B, h, P, hd)
+        V = F.linear(feat, W[2 * d :], b[2 * d :]).view(B, -1, h, hd).transpose(1, 2)
+        w = torch.softmax((Q.unsqueeze(-2) * K.unsqueeze(-3)).sum(-1) * hd**-0.5, dim=-1)  # (B, h, 9, P)
+        out = (w.unsqueeze(-1) * V.unsqueeze(-3)).sum(-2)  # (B, h, 9, hd)
+        return a.out_proj(out.transpose(1, 2).reshape(B, -1, d)), w.mean(1)
 
     @staticmethod
     @torch.no_grad()

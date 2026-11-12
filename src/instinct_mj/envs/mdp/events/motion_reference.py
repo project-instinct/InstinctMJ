@@ -9,6 +9,12 @@ from mjlab.managers import SceneEntityCfg
 from mjlab.managers.event_manager import RecomputeLevel, requires_model_fields
 from mjlab.utils.lab_api import math as math_utils
 
+from instinct_mj.envs.mdp.events.reset_rejection import (
+    AuxPenetrationProbe,
+    reduce_contact_depth,
+    robot_terrain_masks,
+    select_first_passing,
+)
 from instinct_mj.motion_reference.motion_reference_hoi_data import HoiMotionReferenceData, HoiMotionReferenceState
 
 if TYPE_CHECKING:
@@ -63,21 +69,18 @@ def match_motion_ref_with_scene(
     motion_ref.match_scene(env.scene)
 
 
-def _write_reference_reset(
+def _sample_reset_state(
     asset,
     env_ids: torch.Tensor,
-    base_pos_w: torch.Tensor,
-    base_quat_w: torch.Tensor,
-    base_lin_vel_w: torch.Tensor,
-    base_ang_vel_w: torch.Tensor,
-    joint_pos: torch.Tensor,
-    joint_vel: torch.Tensor,
+    ref: tuple[torch.Tensor, ...],
     randomize_pose_range: dict[str, tuple[float, float]],
     randomize_velocity_range: dict[str, tuple[float, float]],
     randomize_joint_pos_range: tuple[float, float],
     clamp_joint_pos_to_limits: bool,
-):
-    """Draw the reset noise on the (noise-free) reference state of ``env_ids`` and write the result to the simulation."""
+) -> tuple[torch.Tensor, ...]:
+    """Draw the reset noise on the (noise-free) reference state ``ref`` of ``env_ids`` (``ref`` rows may repeat an env: one independent draw per row) and return the state
+    (base pos, base quat, base lin vel, base ang vel, joint pos, joint vel) without writing it."""
+    base_pos_w, base_quat_w, base_lin_vel_w, base_ang_vel_w, joint_pos, joint_vel = ref
     # apply randomizations on the reset states if specified
     if randomize_pose_range:
         # Apply pose randomization similar to reset_root_state_uniform
@@ -94,9 +97,6 @@ def _write_reference_reset(
         orientations_delta = math_utils.quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
         base_quat_w = math_utils.quat_mul(orientations_delta, base_quat_w)
 
-    # write the root pose to the simulation
-    asset.write_root_link_pose_to_sim(torch.cat([base_pos_w, base_quat_w], dim=-1), env_ids=env_ids)
-
     # apply velocity randomization if specified
     if randomize_velocity_range:
         # Apply velocity randomization
@@ -110,9 +110,6 @@ def _write_reference_reset(
         base_lin_vel_w = base_lin_vel_w + vel_samples[:, 0:3]
         base_ang_vel_w = base_ang_vel_w + vel_samples[:, 3:6]
 
-    # write the root velocity to the simulation
-    asset.write_root_link_velocity_to_sim(torch.cat([base_lin_vel_w, base_ang_vel_w], dim=-1), env_ids=env_ids)
-
     # apply joint position randomization if specified
     if randomize_joint_pos_range != (0.0, 0.0):
         # Apply joint position randomization
@@ -123,9 +120,35 @@ def _write_reference_reset(
     if clamp_joint_pos_to_limits:
         limits = asset.data.joint_pos_limits[env_ids]
         joint_pos = torch.clamp(joint_pos, limits[..., 0], limits[..., 1])
+    return base_pos_w, base_quat_w, base_lin_vel_w, base_ang_vel_w, joint_pos, joint_vel
 
-    # write the joint state to the simulation
+
+def _write_reset_state(asset, env_ids: torch.Tensor, state: tuple[torch.Tensor, ...]) -> None:
+    """Write a reset state (see ``_sample_reset_state``) of ``env_ids`` to the simulation."""
+    base_pos_w, base_quat_w, base_lin_vel_w, base_ang_vel_w, joint_pos, joint_vel = state
+    asset.write_root_link_pose_to_sim(torch.cat([base_pos_w, base_quat_w], dim=-1), env_ids=env_ids)
+    asset.write_root_link_velocity_to_sim(torch.cat([base_lin_vel_w, base_ang_vel_w], dim=-1), env_ids=env_ids)
     asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+
+
+def _write_reference_reset(
+    asset,
+    env_ids: torch.Tensor,
+    base_pos_w: torch.Tensor,
+    base_quat_w: torch.Tensor,
+    base_lin_vel_w: torch.Tensor,
+    base_ang_vel_w: torch.Tensor,
+    joint_pos: torch.Tensor,
+    joint_vel: torch.Tensor,
+    randomize_pose_range: dict[str, tuple[float, float]],
+    randomize_velocity_range: dict[str, tuple[float, float]],
+    randomize_joint_pos_range: tuple[float, float],
+    clamp_joint_pos_to_limits: bool,
+):
+    """Draw the reset noise on the (noise-free) reference state of ``env_ids`` and write the result to the simulation."""
+    ref = (base_pos_w, base_quat_w, base_lin_vel_w, base_ang_vel_w, joint_pos, joint_vel)
+    noise = (randomize_pose_range, randomize_velocity_range, randomize_joint_pos_range, clamp_joint_pos_to_limits)
+    _write_reset_state(asset, env_ids, _sample_reset_state(asset, env_ids, ref, *noise))
 
 
 def terrain_penetration_depth(
@@ -144,16 +167,7 @@ def terrain_penetration_depth(
     import warp as wp
 
     sim = env.sim
-    cache = getattr(env, "_penetration_geom_masks", None)
-    if cache is None or cache[0] != (asset_cfg.name, terrain_name):
-        ngeom = sim.mj_model.ngeom
-        robot = torch.zeros(ngeom, dtype=torch.bool, device=env.device)
-        terrain = torch.zeros(ngeom, dtype=torch.bool, device=env.device)
-        robot[env.scene[asset_cfg.name].indexing.geom_ids.long()] = True
-        terrain[env.scene[terrain_name].indexing.geom_ids.long()] = True
-        cache = ((asset_cfg.name, terrain_name), robot, terrain)
-        env._penetration_geom_masks = cache
-    _, robot, terrain = cache
+    robot, terrain = robot_terrain_masks(env, asset_cfg, terrain_name)
 
     # kinematics + collision detection only (the contacts are all this needs; 7x cheaper than the full forward with the constraint solver), as a CUDA graph captured once
     # on the sim's data (an eager ``mjwarp.collision`` allocates ~4 MB per env of scratch); recaptured when the sim recaptures its graphs (replaced arrays).
@@ -170,17 +184,7 @@ def terrain_penetration_depth(
             wp.capture_launch(graph[1])
     else:
         sim.forward()
-    contact = sim.wp_data.contact
-    dist, world = wp.to_torch(contact.dist), wp.to_torch(contact.worldid).long()
-    geom = wp.to_torch(contact.geom).long()  # (naconmax, 2)
-    nacon = wp.to_torch(sim.wp_data.nacon)  # (1,)
-    valid = torch.arange(dist.shape[0], device=dist.device) < nacon
-    g0, g1 = geom[:, 0].clamp(min=0), geom[:, 1].clamp(min=0)
-    pair = (robot[g0] & terrain[g1]) | (terrain[g0] & robot[g1])
-    depth = torch.where(valid & pair, -dist, torch.zeros_like(dist)).clamp(min=0.0)
-    out = torch.zeros(env.num_envs, dtype=dist.dtype, device=dist.device)
-    out.scatter_reduce_(0, world.clamp(0, env.num_envs - 1), depth, reduce="amax")
-    return out
+    return reduce_contact_depth(sim.wp_data, robot, terrain, env.num_envs)[0]
 
 
 def reference_reset_state(motion_ref, env_ids, position_offset, dof_vel_ratio, base_lin_vel_ratio, base_ang_vel_ratio):
@@ -214,6 +218,7 @@ def reset_robot_state_by_reference(
     max_resample: int = 8,
     lift_out_of_terrain: bool = False,
     terrain_name: str = "terrain",
+    batched_rejection: bool = True,
 ):
     """Reset robot state based on motion reference with optional randomization.
 
@@ -241,6 +246,11 @@ def reset_robot_state_by_reference(
             hand that the reset noise pushed into a box top starts on it instead of inside it. Vertical only: a contact from the side or from
             above (a ladder rung over the hand) is not resolved. Skipped in the reset of the env construction (step counter 0).
         terrain_name: Scene entity whose geoms are the terrain of the penetration check.
+        batched_rejection: Run the ``max_penetration`` rejection as one batched pass (``reset_rejection``): the ``1 + max_resample`` noise candidates of every reset env (and its
+            noise-free reference) are measured together on a small private mujoco_warp ``Data``, the first clear candidate in draw order is written once (the same distribution as the
+            sequential redraws), and its depth is used for ``lift_out_of_terrain``. Used only if the env model has no randomized collision geometry (checked once, with a one-time
+            print otherwise) and, per call, if no pass of the probe overflowed its contact buffer (a call that did is redone sequentially; counted in the probe's ``num_overflow_calls``); the sequential
+            rejection on the env's data is the fallback (``False``: always that).
     """
     asset: RigidObject | Articulation = env.scene[asset_cfg.name]
     motion_ref: MotionReferenceManager = env.scene[motion_ref_cfg.name]
@@ -253,18 +263,77 @@ def reset_robot_state_by_reference(
     data: MotionReferenceData = motion_ref.data  # triggering the motion reference to update the data.
     ref = reference_reset_state(motion_ref, env_ids, position_offset, dof_vel_ratio, base_lin_vel_ratio, base_ang_vel_ratio)
     noise = (randomize_pose_range, randomize_velocity_range, randomize_joint_pos_range, clamp_joint_pos_to_limits)
+    lift = lift_out_of_terrain and getattr(env, "common_step_counter", 0) > 0
+
+    probe = _rejection_probe(env, asset_cfg, terrain_name) if (max_penetration is not None and batched_rejection) else None
+    if probe is not None:
+        if len(env_ids) == 0 or _reset_batched_rejection(env, probe, asset, env_ids, ref, noise, max_penetration, max_resample, lift):
+            return
+        # the probe's contact buffer overflowed in this call: its depths are unusable, nothing was written; redo the call with the exact sequential rejection below
 
     _write_reference_reset(asset, env_ids, *ref, *noise)
     depth = None  # the penetration depth of every env at the state written last (set by the rejection)
     if max_penetration is not None:
         depth = _reject_penetrating_noise(env, asset, asset_cfg, terrain_name, env_ids, ref, noise, max_penetration, max_resample, clamp_joint_pos_to_limits)
-    if lift_out_of_terrain and getattr(env, "common_step_counter", 0) > 0:
+    if lift:
         if depth is None:
             depth = terrain_penetration_depth(env, asset_cfg, terrain_name)  # (runs sim.forward(): xpos below is the written state)
         depth = depth[env_ids]
         pose = asset.data.root_link_pose_w[env_ids].clone()
         pose[:, 2] += depth
         asset.write_root_link_pose_to_sim(pose, env_ids=env_ids)
+
+
+def _rejection_probe(env, asset_cfg, terrain_name) -> AuxPenetrationProbe | None:
+    """The batched rejection's auxiliary penetration probe of the env (built once; ``None`` = use the sequential rejection, the reason is printed once)."""
+    probes = env.__dict__.setdefault("_reset_rejection_probes", {})
+    key = (asset_cfg.name, terrain_name)
+    if key not in probes:
+        probe, reason = AuxPenetrationProbe.build(env, asset_cfg, terrain_name)
+        probes[key] = probe
+        if probe is None:
+            print(f"[reset rejection] batched rejection disabled, using the sequential one: {reason}")
+        else:
+            print("[reset rejection] batched rejection: all noise candidates of a reset call in one collision pass on a private model")
+    return probes[key]
+
+
+def _gather_candidate(x: torch.Tensor, index: torch.Tensor, num: int) -> torch.Tensor:
+    """Row ``index[r]`` of the ``num`` consecutive rows of env ``r`` in ``x`` ``(R * num, ...)``."""
+    return x.view(-1, num, *x.shape[1:])[torch.arange(len(index), device=x.device), index]
+
+
+def _reset_batched_rejection(env, probe, asset, env_ids, ref, noise, max_penetration, max_resample, lift) -> bool:
+    """``reset_robot_state_by_reference`` with the batched rejection (see ``reset_rejection``): draw ``K = 1 + max_resample`` candidates per env, measure them and the noise-free
+    references in one pass, write the first clear candidate (the reference if none is clear; raised by its depth if ``lift``) and accumulate ``env.reset_penetration_stats``.
+
+    Returns False, with nothing written and no statistics accumulated, if any pass of the probe overflowed its contact buffer (one host sync per call): the depths are then
+    underestimates, of the candidates and of the references the lift reads, and the caller runs the sequential rejection on the env's data for this call."""
+    R, K = len(env_ids), 1 + max_resample
+    cand = _sample_reset_state(asset, env_ids.repeat_interleave(K), tuple(x.repeat_interleave(K, dim=0) for x in ref), *noise)  # env r: rows r*K .. r*K+K-1, in draw order
+    fallback_state = _sample_reset_state(asset, env_ids, ref, {}, {}, (0.0, 0.0), noise[3])  # the noise-free reference (clamped as the candidates)
+    pose = torch.cat([torch.cat([cand[0], cand[1]], dim=-1), torch.cat([fallback_state[0], fallback_state[1]], dim=-1)])
+    depth, overflow = probe.depth(pose, torch.cat([cand[4], fallback_state[4]]))
+    if probe.note_overflow(overflow):
+        return False
+    depth_cand, depth_ref = depth[: R * K].view(R, K), depth[R * K :]
+    index, fallback = select_first_passing(depth_cand, max_penetration)
+    chosen_depth = torch.where(fallback, depth_ref, depth_cand[torch.arange(R, device=index.device), index])
+    chosen = tuple(torch.where(fallback.view(-1, *([1] * (c.ndim - 1))), f, _gather_candidate(c, index, K)) for c, f in zip(cand, fallback_state))
+    if lift:  # raise the root by the depth of the chosen state (vertical only), as the sequential path
+        chosen = (chosen[0] + torch.stack([torch.zeros_like(chosen_depth), torch.zeros_like(chosen_depth), chosen_depth], dim=-1), *chosen[1:])
+    _write_reset_state(asset, env_ids, chosen)
+    counts = torch.stack([
+        torch.tensor(float(R), device=depth.device, dtype=torch.float64),
+        (depth_cand[:, 0] > max_penetration).sum().double(),
+        fallback.sum().double(),
+        (fallback & (depth_ref > max_penetration)).sum().double(),
+    ])  # fmt: skip
+    stats = getattr(env, "reset_penetration_stats", None)
+    if stats is None:
+        stats = env.reset_penetration_stats = torch.zeros(4, dtype=torch.float64, device=depth.device)
+    stats += counts.to(stats.device)
+    return True
 
 
 def _reject_penetrating_noise(env, asset, asset_cfg, terrain_name, env_ids, ref, noise, max_penetration, max_resample, clamp_joint_pos_to_limits) -> torch.Tensor:
@@ -289,7 +358,7 @@ def _reject_penetrating_noise(env, asset, asset_cfg, terrain_name, env_ids, ref,
     stats = getattr(env, "reset_penetration_stats", None)
     if stats is None:
         stats = env.reset_penetration_stats = torch.zeros(4, dtype=torch.float64)
-    stats += torch.tensor([len(env_ids), num_resampled, num_fallback, num_ref_pen], dtype=torch.float64)
+    stats += torch.tensor([len(env_ids), num_resampled, num_fallback, num_ref_pen], dtype=torch.float64, device=stats.device)
     return depth
 
 

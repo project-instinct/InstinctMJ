@@ -52,6 +52,13 @@ Differences to upstream (which has a 9-body sphere approximation and analytic bo
     The source sidecars ``<stem>.contacts.npz`` are copied unchanged (the labels stay those of the unrefined data, no relabelling);
     ``--check`` reports whether the refined motion still agrees with them (distance of each labelled body to the terrain within
     0..1.5 cm / d_on, and its distance to the labelled contact point ``contact_pos_w``).
+    Before training on the result, refresh those geometric fields against the refined poses while preserving the source sequence::
+
+      python -m instinct_mj.scripts.acp.refresh_contacts --dataset REFINED --reference-dataset SOURCE \
+        --out TRAINING_SNAPSHOT --simplified-collision --workers 3
+
+    Use the collision-model option of the target training run. Contacts that cannot reach their original support are reported for
+    further motion repair; refreshing contact geometry does not make those poses dynamically feasible.
 
 Memory: batches are cut so that ``clips * frames * points <= --budget`` (default 6e6 points, ~3 GB of GPU memory with autograd).
 """

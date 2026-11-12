@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 import numpy as np
 import pytorch_kinematics as pk
+from dataclasses import fields
+
 import torch
 import torch.distributed as dist
 
@@ -45,6 +47,9 @@ class MotionReferenceManager(Sensor):
     """
 
     cfg: MotionReferenceManagerCfg
+
+    COPY_FRAME0_TO_REFERENCE_FRAME = True
+    """``reference_frame`` reuses frame 0 of an already-current ``data`` (``data_start_from="current_time"``) instead of a second interpolation."""
 
     def __init__(
         self,
@@ -179,6 +184,16 @@ class MotionReferenceManager(Sensor):
             (self._reference_frame_timestamp - self._timestamp).abs() > 1e-6, self._reference_frame_timestamp < 1e-6
         )
         if outdated_mask.any():
+            if self.cfg.data_start_from == "current_time" and type(self).COPY_FRAME0_TO_REFERENCE_FRAME:
+                # Frame 0 of ``data`` is the reference at the data's refresh time: where ``data`` was ALREADY refreshed at the current time (this does not
+                # trigger a refresh, so the data / keyframe timing is unchanged), the reference frame is that frame (same interpolation, same time, same
+                # augmentation) and is copied instead of interpolated a second time.
+                fresh = outdated_mask & ~self._is_outdated & ((self._data_timestamp_last_update - self._timestamp).abs() <= 1e-6)
+                if fresh.any():
+                    self._copy_frame0_to_reference_frame(fresh)
+                    self._reference_frame_timestamp[fresh] = self._timestamp[fresh]
+                    outdated_mask = outdated_mask & ~fresh
+        if outdated_mask.any():
             env_ids_to_update = self._ALL_INDICES[outdated_mask]
             for name, buffer in self._motion_buffers.items():
                 env_ids_assignment = self._motion_buffer_assignment[name]
@@ -198,11 +213,28 @@ class MotionReferenceManager(Sensor):
                     env_ids_to_augment = env_ids_this_buffer[self._env_symmetric_augmentation_mask[env_ids_this_buffer]]
                     self._symmetric_augment_reference_data(self._reference_frame, env_ids_to_augment)
             self._reference_frame_timestamp[outdated_mask] = self._timestamp[outdated_mask]
-        else:
+        elif not bool((self._reference_frame_timestamp < 1e-6).any()):  # (as before: never "current" while an env is at t = 0)
             # No clock change until update/reset. Keep the t=0 refresh semantics:
             # a reset frame remains outdated even after it has been filled.
             self._reference_frame_current = True
         return self._reference_frame
+
+    def _copy_frame0_to_reference_frame(self, mask: torch.Tensor) -> None:
+        """reference_frame[mask] = data[mask, frame 0] for every per-env field (the data's other per-env fields: validity, masks, time_to_target_frame)."""
+        n = self._num_envs
+        for f in fields(self._reference_frame):
+            dst = getattr(self._reference_frame, f.name)
+            src = getattr(self._data, f.name)
+            if f.name == "time_to_target_frame":  # the data's bookkeeping, not part of the interpolated reference
+                continue
+            if not isinstance(dst, torch.Tensor) or not isinstance(src, torch.Tensor) or dst.shape[:1] != (n,) or src.shape[:1] != (n,):
+                continue
+            if dst.dim() >= 2 and src.dim() == dst.dim() and dst.shape[1] == 1:
+                src = src[:, :1]
+            if src.shape != dst.shape:
+                continue
+            m = mask.view(n, *([1] * (dst.dim() - 1)))
+            dst.copy_(torch.where(m, src, dst))
 
     @property
     def reference_relative_base_pos(self) -> torch.Tensor:

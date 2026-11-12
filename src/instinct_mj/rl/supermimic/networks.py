@@ -85,13 +85,13 @@ class WorldModel(nn.Module):
     (the latent of the policy's depth encoder). z is normalized with running statistics kept here (``update_z_stats``).
     With ``z_dim = 0`` there is no latent: ``step`` takes ``z=None`` and returns ``None`` in its place."""
 
-    def __init__(self, scan_dim: int, num_contact: int, xi_dim: int, z_dim: int = 0, hidden=(2048, 2048, 2048), num_joints: int = NUM_J):
+    def __init__(self, scan_dim: int, num_contact: int, xi_dim: int, z_dim: int = 0, hidden=(2048, 2048, 2048), num_joints: int = NUM_J, act=nn.SiLU):
         super().__init__()
         self.num_joints = num_joints
         self.wm_out = 12 + 2 * num_joints  # state increments: position, rotation, lin vel, ang vel (3 each), joint pos, joint vel
         self.in_dim = (12 + 2 * num_joints) + num_joints + xi_dim + scan_dim  # invariant features + action + context + scan
         self.num_contact, self.z_dim = num_contact, z_dim
-        self.net = mlp(self.in_dim + z_dim, list(hidden), self.wm_out + num_contact + z_dim, act=nn.SiLU, layer_norm=True)
+        self.net = mlp(self.in_dim + z_dim, list(hidden), self.wm_out + num_contact + z_dim, act=act, layer_norm=True)
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
         with torch.no_grad():
@@ -101,6 +101,19 @@ class WorldModel(nn.Module):
         self.register_buffer("z_mean", torch.zeros(z_dim))
         self.register_buffer("z_std", torch.ones(z_dim))
         self.register_buffer("dz_std", torch.ones(z_dim))
+        # "free" (default): every increment (position, rotation, velocities, joints) is an independent output.
+        # "semi_implicit" (official HybridRobotics/supermimic GenCoordRepresentation.apply_prediction): only the velocity
+        # increments dv, dw, dqd are used; the pose integrates the velocities, p1 = p + dt (v + c dv), with
+        # c = (D + 1) / (2 D) for D physics substeps of semi-implicit Euler per control step (``set_integrator``).
+        self.integrator, self.dt, self.substep_c = "free", 0.0, 1.0
+        self.denormalize_output = True  # opt-in ACP override; shared tasks retain legacy scaling
+
+    def set_integrator(self, integrator: str, dt: float = 0.0, decimation: int = 1) -> None:
+        if integrator not in ("free", "semi_implicit"):
+            raise ValueError(f"integrator must be 'free' or 'semi_implicit', got {integrator!r}")
+        if integrator == "semi_implicit" and dt <= 0:
+            raise ValueError("semi_implicit integration needs the control step dt")
+        self.integrator, self.dt, self.substep_c = integrator, float(dt), (decimation + 1) / (2 * decimation)
 
     @torch.no_grad()
     def update_z_stats(self, z: torch.Tensor, dz: torch.Tensor, w: torch.Tensor, rate: float = 0.01):
@@ -138,15 +151,24 @@ class WorldModel(nn.Module):
         p, R, v, w, q, qd = S
         x = self.in_norm(self.inputs(S, a, xi_n, scan))
         y = run_mlp(self.net, x if self.z_dim == 0 else torch.cat((x, (z - self.z_mean) / self.z_std), -1))
-        d = y[..., : self.wm_out] * self.out_norm.std() + self.out_norm.mean
+        d = y[..., : self.wm_out]
+        if self.denormalize_output:
+            d = d * self.out_norm.std() + self.out_norm.mean
         H = yaw_mat(R)
         dp, dth, dv, dw, dq, dqd = d.split((3, 3, 3, 3, self.num_joints, self.num_joints), -1)
+        z1 = None if self.z_dim == 0 else z + y[..., self.wm_out + self.num_contact :] * self.dz_std
+        logits = y[..., self.wm_out : self.wm_out + self.num_contact]
+        if self.integrator == "semi_implicit":  # v, w are world-frame (free-joint origin velocity), dv, dw in the current body frame
+            c, dt = self.substep_c, self.dt
+            dv_w, dw_b = mv(R, dv), dw
+            p1 = p + dt * (v + c * dv_w)
+            R1 = mm(R, so3_exp(dt * (mv(R.transpose(-1, -2), w) + c * dw_b)))
+            return (p1, R1, v + dv_w, w + mv(R, dw_b), q + dt * (qd + c * dqd), qd + dqd), logits, z1
         p1 = p + mv(H, dp)
         R1 = mm(R, so3_exp(dth))
         v1 = v + mv(R, dv)
         w1 = w + mv(R, dw)
-        z1 = None if self.z_dim == 0 else z + y[..., self.wm_out + self.num_contact :] * self.dz_std
-        return (p1, R1, v1, w1, q + dq, qd + dqd), y[..., self.wm_out : self.wm_out + self.num_contact], z1
+        return (p1, R1, v1, w1, q + dq, qd + dqd), logits, z1
 
     @staticmethod
     def state_error(S_hat, S):
@@ -216,10 +238,11 @@ class ValueHead(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, in_dim: int, hidden=(256, 128)):
+    def __init__(self, in_dim: int, hidden=(256, 128), *, act=nn.ELU, layer_norm: bool = False, normalize_input: bool = True):
         super().__init__()
-        self.net = mlp(in_dim, list(hidden), 1)
+        self.net = mlp(in_dim, list(hidden), 1, act=act, layer_norm=layer_norm)
         self.norm = RunningNorm(in_dim)
+        self.normalize_input = normalize_input
 
     def forward(self, x):
-        return run_mlp(self.net, self.norm(x)).squeeze(-1)
+        return run_mlp(self.net, self.norm(x) if self.normalize_input else x).squeeze(-1)

@@ -43,7 +43,7 @@ rollouts) for the tracker; the contact planner stays supervised (it never used P
 | Rewards from the simulator | the same Table 3 terms computed analytically on imagined states (FK); contact-label and slippage terms use the soft sphere-SDF contact of the predicted state (`contact_detect="sdf"`; "force_head": the world model's 9-body contact head) |
 | Dual critics Vm / Vfs, separate advantage normalization | two critics on the same imagined batch, routed by env type; returns normalized per regime |
 | 500-iteration warm-up of Vfs | Vfs trained, goal-reaching starts excluded from the actor loss for the first 500 iterations |
-| Entropy / KL-adaptive lr | exploration noise during collection, cosine lr |
+| Entropy / KL-adaptive lr | exploration noise during collection, constant lr (the official supermimic has no lr schedule) |
 | Planner 10 updates per PPO iteration | `ACPRunnerCfg` default 10 per SuperMimic iteration; `G1AcpStage2RunnerCfg` (and `run_stage2.sh`) uses 1 (2026-11-05, v1): a PPO iteration of Table S6 holds 115,200 transitions, a SuperMimic iteration ~5,100, so 1 update is ~2x the paper's updates per transition |
 
 The world model state is (p, R, v, w, q[29], qd[29]); context: the 17x11 height scan, DR vector xi, previous action. In
@@ -248,6 +248,31 @@ stalled at the wall. The launchers (`run_stage{1,2,3}.sh`) now follow supermimic
   constraint solver is not needed for the contacts): 3.13 -> 0.66 ms per call at 2048 envs, depths identical (max difference 0 on 40960 states).
 - CSI: a real failure / illegal reset / manual reset at phase >= `csi_success_phase` no longer counts as a success (`counted` = failure, clip end
   or cap without illegal_reset_contact; success needs no failure and the pelvis on the reference).
+
+## Official supermimic is the only path (2026-11-11)
+
+The ACP runner follows the official HybridRobotics/supermimic with no switches for it; the supermimic_vibed-era alternatives are removed (old checkpoints / old option values are not
+supported; `rl/supermimic/` keeps its defaults for the vision / parkour tasks, the ACP runner configures the shared classes). What the runner does now:
+- World model: semi-implicit gencoord integration (`WorldModel.set_integrator("semi_implicit")`), no output de-normalization, GELU (`act=nn.GELU`), complete k-step windows (`sample_complete_windows`;
+  the failure / termination heads, when on, keep their own masked-window batch `wm_failure_frac` / `wm_balance_frac` / `failure_window_fix`), loss = official `WorldModelLearner._compute_losses`
+  on the gencoord loss blocks (`runner.wm_state_error`: root position, root rotation matrix x sqrt(1/2), joint position, joint velocity; weights 1 / nominal^2 with 0.01 / 0.02 / 0.1 / 3.14; mean over the
+  valid steps; no root velocity supervision) + the ACP contact BCE.
+- Optimizer: `MuonAdam` (Muon on the hidden Linear weights, fused capturable Adam / AdamW on the rest) for the world model, the actor (AdamW, betas (0.9, 0.95)) and every critic (Vfs too).
+- Critic: LN + GELU MLP on the raw features (no input normalization), raw values inside the lambda return, targets clamped at the analytic v_max (sum of the positive reward weights x dt / (1 - gamma));
+  actor bootstraps clamped at v_max; one permutation for all critic epochs. Stage 3: v_max per critic from its own objective (`ACPStage3MDP.max_step_reward`: Vm = the tracking terms, Vfs = goal terms +
+  regularizers + planned contact).
+- Imagined termination: one sigmoid of the largest threshold-normalized error, softness 0.05 (`mdp.soft_termination`), plus the contact-violation hazard.
+- Reset sampling: `ReturnBins` (official `ReturnSampler`); a step that times out (cap, clip end) and terminates counts as the time-out (`runner.episode_end_flags`), a non-finite simulator step still
+  counts as a failure.
+- Context xi: DR-range encoding (`sim.dr_range_xi_stats`), passed through the world-model input normalization.
+- Precision: TF32 matmuls (`allow_tf32`), no bf16 autocast (`amp` and `policy_autocast` removed; `networks.AMP_DTYPE` stays None for ACP).
+- Schedule: `replay_ratio` 16 (utd = num_envs x 16 / (wm_batches x wm_batch x wm_window)).
+- Clip end: the reference stays on the last frame of its clip (`runner.advance_reference_frame`), no masking, no terminal; imagination starts from every buffered state (`f <= clip end`).
+  The real collection still truncates at the clip end (Stage 1 `done |= f1 >= clip_end`), recorded by `ReturnBins` as the clip end.
+Removed config fields: `utd`, `wm_integrator`, `wm_loss` ("std" loss, `ERR_FLOOR`), `wm_output_denorm`, `wm_gelu`, `wm_complete_windows`, `wm_bryson_mean_loss`, `optimizer`, `critic_ln_gelu`,
+`critic_running_norm`, `critic_target_raw_values`, `critic_reuse_permutation`, `value_max`, `value_max_auto`, `soft_term_tau_dist`, `soft_term_tau_tilt`, `reset_sampling`, `csi_*`, `bins_v2`,
+`bins_difficulty_k`, `amp`, `policy_autocast`, `xi_normalization` (and `set_xi_stats` / `XI_FLOOR`), `imagine_past_clip_end`, `clip_end_bootstrap`, `clip_end_v2`, `clip_end_exact_last`, the `step_valid` / `step_last` masks, the
+CSI phase cap (`EpisodeStart.set_phase_cap`; the env-side CSI mode stays for PPO), the runner's per-episode return bookkeeping (`ep_disc_ret`, `episode_return`). The launchers spell out the new field set.
 
 ## Speed (2026-11-08; results unchanged)
 

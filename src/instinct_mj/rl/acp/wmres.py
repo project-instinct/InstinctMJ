@@ -13,7 +13,7 @@ Here the trigger is the world-model contact head of the current run (``geo_conta
 imagined contact rewards, so a threshold crossing of ``sigmoid(logits)`` is the visible contact event of the imagination). The
 truncation: at the first event step ``t*`` of a start, the event step's reward is scaled by ``1 - alpha`` (default 1: dropped),
 the steps after it get zero continuation, and ``J`` gains ``gamma^t* * c_t* * V(s_t*)`` of the last pre-event state -- the same
-per-(step, start) bootstrap pattern as ``clip_end_bootstrap``, reusing the same critic. The critic fit and its GAE targets are
+per-(step, start) bootstrap pattern as the horizon bootstrap, reusing the same critic. The critic fit and its GAE targets are
 NOT truncated (AHAC fits the critic on the full trajectory), so the value that takes over at the event still learns through it.
 
 Everything here is inert unless ``wmres_cut`` is true and the iteration is past ``wmres_cut_warmup_iters`` (the contact head is

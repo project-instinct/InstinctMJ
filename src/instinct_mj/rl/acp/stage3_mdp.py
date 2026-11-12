@@ -32,6 +32,7 @@ from .kinematics import ACPKinematics
 from .rays import ExactHeightScanner
 from .mdp import ACPMDP, INV_DIM, SCAN_NX, SCAN_NY, heading, wrap_to_pi
 from .motion import NUM_CONTACT, PELVIS, ACPMotion
+from .planner import TRACKED_LINKS
 from .sim import CONTACTS_COMMAND, make_kinematics, HEIGHT_SCANNER_MAX_DISTANCE, HEIGHT_SCANNER_RESOLUTION, HEIGHT_SCANNER_SIZE
 
 REF_ONLY_TERMS = (
@@ -125,7 +126,10 @@ class ACPStage3MDP(ACPMDP):
         self.tau = dict(dist=cfg["goal_soft_tau_dist"], speed=cfg["goal_soft_tau_speed"], height=cfg["goal_soft_tau_height"], angle=cfg["goal_soft_tau_angle"])
         gw = env.reward_manager.get_term_cfg
         self.gp = {n: gw(n).params for n in ("move2goal", "standatgoal", "slippage")}
-        self.feet = list(FEET)
+        self.feet = torch.tensor(list(FEET), device=device)  # (a device tensor: indexing with a Python list copies the indices from the host, not allowed inside a CUDA graph capture)
+        # the torso's rotation / angular velocity come out of the tracked-body FK when the motion tracks the torso (rows of ``kin.forward_all``), else of ``kin_torso``
+        self.torso_row = TRACKED_LINKS.index("torso_link") if "torso_link" in TRACKED_LINKS[: motion.track_p.shape[1]] else None
+        self.down = torch.tensor([0.0, 0.0, -1.0], device=device)  # (a constant: no host-to-device copy inside a CUDA graph capture)
 
     # ---------------- goal command / geometry ----------------
     def goal_command(self, base_p, base_R, goal_pos, goal_yaw) -> torch.Tensor:
@@ -141,14 +145,22 @@ class ACPStage3MDP(ACPMDP):
         return (x > 0).float() if hard else torch.sigmoid(x / tau)
 
     # ---------------- rewards ----------------
-    def goal_terms(self, S, contact, contact_prev, goal_pos, goal_yaw, tile, hard: bool, stumbling: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
+    def goal_terms(self, S, contact, contact_prev, goal_pos, goal_yaw, tile, hard: bool, stumbling: torch.Tensor | None = None, fk=None) -> dict[str, torch.Tensor]:
         """Weighted goal terms (per row, ``dt`` not applied) of the transitions ending in ``S`` for goal envs on ``tile`` (rows,).
         ``contact`` / ``contact_prev``: c_meas of the nine links now and one control step earlier (probabilities in imagination),
-        ``stumbling``: the count of stumbling links (measured on real transitions, the head's expected count in imagination; None: 0)."""
+        ``stumbling``: the count of stumbling links (measured on real transitions, the head's expected count in imagination; None: 0).
+        ``fk``: ``kin.forward_all(*S)`` when the caller has it already (the imagination does; the torso then comes out of it too)."""
         T, tau, w = self.tables, self.tau, self.w
-        bp, bR, bv, bw = self.kin.forward(*S)
+        if fk is None:
+            bp, bR, bv, bw = self.kin.forward(*S)
+            _, tor_R, _, tor_w = (x[:, 0] for x in self.kin_torso.forward(*S))
+        else:
+            bp, bR, bv, bw = (x[:, :NUM_CONTACT] for x in fk)
+            if self.torso_row is None:
+                _, tor_R, _, tor_w = (x[:, 0] for x in self.kin_torso.forward(*S))
+            else:
+                tor_R, tor_w = fk[1][:, self.torso_row], fk[3][:, self.torso_row]
         pel_p, pel_R, pel_v = bp[:, PELVIS], bR[:, PELVIS], bv[:, PELVIS]
-        _, tor_R, _, tor_w = (x[:, 0] for x in self.kin_torso.forward(*S))
         d = goal_pos[:, :2] - pel_p[:, :2]
         dist = torch.sqrt(d.square().sum(-1) + 1e-10)
         dz = goal_pos[:, 2] - pel_p[:, 2]
@@ -183,30 +195,30 @@ class ACPStage3MDP(ACPMDP):
 
     def reward_mixed(
         self, S, qd0, f, phase, origin, a, a_prev, a_prev2, xi, contact, contact_prev, lp_hist, ep0, H: int, is_goal: torch.Tensor,
-        goal_pos, goal_yaw, tile, planned=None, eta_rew=None, hard: bool = False, stumbling=None,
+        goal_pos, goal_yaw, tile, planned=None, eta_rew=None, hard: bool = False, stumbling=None, fk=None,
     ):  # fmt: skip
         """Per-step reward (weights and ``dt`` applied) of the Stage 3 task for a batch of mixed rows: the tracking terms on the reference
-        rows, the goal terms on the goal rows, the regularizers on all (``ACPMDP.reward`` + ``goal_terms``). Returns (reward, terms)."""
-        _, t = super().reward(S, qd0, f, phase, origin, a, a_prev, a_prev2, xi, contact, lp_hist, ep0, H, planned, eta_rew, terms=True)
+        rows, the goal terms on the goal rows, the regularizers on all (``ACPMDP.reward`` + ``goal_terms``). Returns (reward, terms). ``fk``: ``kin.forward_all(*S)`` when the caller has it already."""
+        _, t = super().reward(S, qd0, f, phase, origin, a, a_prev, a_prev2, xi, contact, lp_hist, ep0, H, planned, eta_rew, terms=True, fk=fk)
         ref, gol = (~is_goal).float(), is_goal.float()
         # ``track_planned_contact`` applies to all envs with the planner targets (``planned``); the env itself only knows the reference targets
         # (``planned is None``): there it is evaluated on the reference envs only
         for k in REF_ONLY_TERMS:
             if planned is None or k != "track_planned_contact":
                 t[k] = t[k] * ref
-        for k, v in self.goal_terms(S, contact, contact_prev, goal_pos, goal_yaw, tile, hard, stumbling).items():
+        for k, v in self.goal_terms(S, contact, contact_prev, goal_pos, goal_yaw, tile, hard, stumbling, fk).items():
             t[k] = v * gol
         return sum(t.values()) * self.dt, t
 
     # ---------------- termination ----------------
-    def goal_termination(self, S, tile, tz: float = 0.02, tt: float = 0.04, hard: bool = False, tilt_threshold: float = 0.8, clearance: float = 0.3):
+    def goal_termination(self, S, tile, tz: float = 0.02, tt: float = 0.04, hard: bool = False, tilt_threshold: float = 0.8, clearance: float = 0.3, fk=None):
         """Fall of a goal env (``goal_fall``): the pelvis below the lowest walkable surface of its tile, or, on the foot terrains, tilted
-        beyond ``tilt_threshold`` or lower than ``clearance`` above the surface. Soft (probability) unless ``hard``."""
+        beyond ``tilt_threshold`` or lower than ``clearance`` above the surface. Soft (probability) unless ``hard``. ``fk``: ``kin.forward_all(*S)`` when the caller has it already."""
         T = self.tables
-        bp, bR = self.kin.forward(*S)[:2]
+        bp, bR = (self.kin.forward(*S) if fk is None else fk)[:2]
         pel_p, pel_R = bp[:, PELVIS], bR[:, PELVIS]
         z_low = T.z_low[tile] + T.origin[tile][:, 2] - FALL_MARGIN
-        tilt = (-pel_R[:, 2, :] - torch.tensor([0.0, 0.0, -1.0], device=pel_R.device)).norm(dim=-1)
+        tilt = (-pel_R[:, 2, :] - self.down).norm(dim=-1)
         clr = pel_p[:, 2] - self.scanner.ground_height(pel_p[:, None, :2]).squeeze(-1)
         foot = T.foot[tile].float()
         if hard:
@@ -214,12 +226,21 @@ class ACPStage3MDP(ACPMDP):
         alive = (1 - torch.sigmoid((z_low - pel_p[:, 2]) / tz)) * (1 - foot * torch.sigmoid((tilt - tilt_threshold) / tt)) * (1 - foot * torch.sigmoid((clearance - clr) / tz))
         return 1 - alive
 
+    # ---------------- value bound ----------------
+    def max_step_reward(self, eta_rew: float, names=None, goal: bool = False) -> float:
+        """Largest per-step reward of the objective of one critic. Reference critic Vm (``goal=False``): the tracking terms of ``ACPMDP.reward`` (the goal terms are not in its
+        return). Goal critic Vfs (``goal=True``, ``reward_mixed`` on goal rows): the goal terms, the regularizers and the planned-contact term (``planned`` targets); the other
+        reference-only terms are masked off."""
+        if names is None:
+            names = [n for n in self.w if n not in GOAL_TERMS] if not goal else [n for n in self.w if n in GOAL_TERMS or n not in REF_ONLY_TERMS or n == "track_planned_contact"]
+        return super().max_step_reward(eta_rew, names)
+
     # ---------------- critic ----------------
-    def goal_critic_features(self, S, goal_pos, goal_yaw, t_norm, planned_b, planned_valid, xi_n) -> torch.Tensor:
+    def goal_critic_features(self, S, goal_pos, goal_yaw, t_norm, planned_b, planned_valid, xi_n, fk=None) -> torch.Tensor:
         """Input of Vfs (privileged, noise-free): invariant state (tilt, body-frame velocities, joints), goal command g, horizontal
         distance d_g, vertical offset dz = z_goal - z_base, elapsed time over the horizon, the planner's predicted contacts (targets in the
-        base-yaw frame and validity), the full critic scan (``critic_scan``) of the true pose and the DR context."""
-        bp, bR = self.kin.forward(*S)[:2]
+        base-yaw frame and validity), the full critic scan (``critic_scan``) of the true pose and the DR context. ``fk``: ``kin.forward_all(*S)`` when the caller has it already."""
+        bp, bR = (self.kin.forward(*S) if fk is None else fk)[:2]
         pel_p, pel_R = bp[:, PELVIS], bR[:, PELVIS]
         dist = (goal_pos[:, :2] - pel_p[:, :2]).norm(dim=-1, keepdim=True)
         dz = (goal_pos[:, 2] - pel_p[:, 2]).unsqueeze(-1)

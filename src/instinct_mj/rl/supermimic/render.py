@@ -52,7 +52,6 @@ class Worlds:
                 enabled_geom_groups=groups, cam_active=[False] * mjm.ncam, render_seg=None,
             )  # fmt: skip
         self.qpos = wp.to_torch(self.d.qpos)  # (nworld, nq)
-        self.no_exclude: dict[int, wp.array] = {}  # per number of rays per world
 
     def update(self) -> None:
         """Forward kinematics of the written ``qpos`` and BVH refit."""
@@ -62,14 +61,15 @@ class Worlds:
     def cast(self, pnt: torch.Tensor, vec: torch.Tensor):
         """Rays (nworld, n, 3), each in its own world: fresh outputs ``dist`` (nworld, n) (-1 = miss), ``normal``, ``geomid``."""
         W, n = pnt.shape[:2]
-        if n not in self.no_exclude:
-            self.no_exclude[n] = wp.from_torch(torch.full((n,), -1, dtype=torch.int32, device=self.device), dtype=wp.int32)
+        # a fresh "-1" (no excluded body) per call, like the outputs: a buffer cached across calls would be allocated inside the CUDA-graph pool of the first
+        # compiled caller that sees this n (torch.compile "reduce-overhead") and outlive it, which cudagraph trees reject
+        no_exclude = torch.full((n,), -1, dtype=torch.int32, device=self.device)
         dist = torch.empty(W, n, device=self.device)
         normal = torch.empty(W, n, 3, device=self.device)
         geomid = torch.empty(W, n, dtype=torch.int32, device=self.device)
         rays(
             m=self.m, d=self.d, pnt=wp.from_torch(pnt, dtype=wp.vec3), vec=wp.from_torch(vec, dtype=wp.vec3), geomgroup=self.geomgroup,
-            flg_static=True, bodyexclude=self.no_exclude[n], dist=wp.from_torch(dist, dtype=wp.float32),
+            flg_static=True, bodyexclude=wp.from_torch(no_exclude, dtype=wp.int32), dist=wp.from_torch(dist, dtype=wp.float32),
             geomid=wp.from_torch(geomid, dtype=wp.int32), normal=wp.from_torch(normal, dtype=wp.vec3), rc=self.rc,
         )  # fmt: skip
         return dist, normal, geomid.long()
