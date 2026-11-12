@@ -43,3 +43,6 @@ diag_fix_test.py
 check_ref*.py
 webplay_hoi.py
 *.slurm
+
+# ACP reference viewer (local tool, not part of the repository)
+/acp_player/
