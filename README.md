@@ -6,13 +6,10 @@
 [![instinct_rl](https://img.shields.io/badge/training-instinct__rl-brightgreen.svg)](https://github.com/project-instinct/instinct_rl)
 
 The `acp` branch reproduces **ACP**, *Humanoid Mobility via Attention-based Contacts*
-([arXiv 2610.31608](https://arxiv.org/abs/2610.31608)), on the Unitree G1 in `mjlab` / MuJoCo Warp. The paper's PPO is replaced by
-**SuperMimic** as released by its authors ([HybridRobotics/supermimic](https://github.com/HybridRobotics/supermimic)): the simulator
-only collects data, a learned world model predicts the robot state, and the policy is trained by backpropagation through 32-step
-imagined rollouts. The ACP MDP (observations, rewards, domain randomization, the attention-based contact planner) follows the paper;
-choices the paper leaves open are marked `# ACP-unspecified` in the code and listed in
-[src/instinct_mj/rl/acp/PLAN.md](src/instinct_mj/rl/acp/PLAN.md). InstinctMJ is the `mjlab` port of
-[InstinctLab](https://github.com/project-instinct/InstinctLab) ([Project-Instinct](https://project-instinct.github.io/)).
+([arXiv 2610.31608](https://arxiv.org/abs/2610.31608)), on the Unitree G1 in `mjlab` / MuJoCo Warp, with the paper's PPO replaced by
+**SuperMimic** ([HybridRobotics/supermimic](https://github.com/HybridRobotics/supermimic)): a learned world model and backpropagation
+through imagined rollouts. The ACP MDP and contact planner follow the paper; open choices are marked `# ACP-unspecified` and listed
+in [src/instinct_mj/rl/acp/PLAN.md](src/instinct_mj/rl/acp/PLAN.md).
 
 ## Stages
 
@@ -24,44 +21,17 @@ choices the paper leaves open are marked `# ACP-unspecified` in the code and lis
 
 Each stage starts from the previous stage's checkpoint. The play variants (`...-Play-v1`) run the trained policy.
 
-## Learning loop (official SuperMimic)
+## Learning loop
 
-The runner (`src/instinct_mj/rl/acp/runner.py`, Stage 3: `stage3_runner.py`) implements the official SuperMimic loop only:
+The runner (`src/instinct_mj/rl/acp/runner.py`, Stage 3: `stage3_runner.py`) follows the official SuperMimic:
 
-- **World model**: Linear → LayerNorm → GELU MLP (3 × 2048) that predicts the velocity increments; root pose and joints are
-  integrated semi-implicitly with the substep coefficient (D + 1) / (2D). It is trained on complete 8-transition windows with the
-  official generalized-coordinate loss (root position, root rotation as a chordal distance, joint positions, joint velocities, fixed
-  nominal errors), plus the ACP contact head.
-- **Policy**: 32-step BPTT through the world model with survival masking and a critic bootstrap; λ-returns (γ 0.99, λ 0.95) clamped
-  at the analytic value bound of the current reward weights.
-- **Critic**: LayerNorm + GELU MLP on raw features (Stage 3: Vm and Vfs, each with its own value bound).
-- **Optimizers**: Muon on the hidden Linear weights, fused Adam on the rest, constant learning rate 2e-4, TF32 matmuls.
-- **Schedule**: replay ratio 16 (`utd = num_envs × 16 / (10 × 2048 × 8)`).
-- **Episode starts**: the official `ReturnSampler` over 1 s bins of every clip, time-outs taking precedence over terminations.
-- **Domain context**: encoded by the ranges of the env's DR events.
-- **Clip ends**: the reference stays at the clip's last frame, and imagination may start from any buffered state.
+- world model: LayerNorm + GELU MLP predicting velocity increments, semi-implicit integration, trained on complete 8-step windows
+  with the official generalized-coordinate loss (plus the ACP contact head);
+- policy: 32-step BPTT through the world model, critic bootstrap, λ-returns clamped at the analytic value bound;
+- Muon + fused Adam, constant learning rate 2e-4, TF32, replay ratio 16;
+- episode starts from the official `ReturnSampler`; the reference stays at the clip's last frame.
 
-Speed-ups that leave the computation unchanged (verified against the previous code up to float rounding):
-
-- CUDA graphs for the world-model update and for the Stage 1 / 2 / 3 policy updates.
-- The planner attention computed as broadcast multiply-sums, compiled in training.
-- A single batched penetration check of the reset noise candidates.
-- The env observation group that training never reads is not computed.
-
-Throughput: about 1.05 iterations / s at 4096 envs on an RTX 3090 (Stage 1); about 1.7 iterations / s at 2048 envs on an RTX 4090.
-
-## Results
-
-Vault set, 155 clips, evaluated from the clip start with domain randomization, observation noise and 0.1 action noise
-(`eval_tracker.py --mode robust`, 8 episodes per clip):
-
-| Stage 1 at iteration 7500 | success | strict success | clips with success >= 0.75 |
-|---|---|---|---|
-| supermimic_vibed-style loop (previous version of this branch) | 0.764 | 0.436 | 109 |
-| official SuperMimic options, first batch | **0.933** | **0.868** | **153** |
-
-Strict success additionally requires the nine contact links to stay within 0.35 m of the reference height. The current code includes
-all official options; its full-dataset results are not reported yet.
+The world-model and policy updates run as CUDA graphs.
 
 ## Installation
 
@@ -87,9 +57,7 @@ ACP_DATASET=/path/to/dataset NUM_ENVS=4096 MAX=20000 src/instinct_mj/scripts/acp
 # Stage 2 / 3 from the previous stage
 ACP_DATASET=/path/to/dataset STAGE1_CKPT=/abs/path/model_<it>.pt src/instinct_mj/scripts/acp/run_stage2.sh
 ACP_DATASET=/path/to/dataset STAGE2_CKPT=/abs/path/model_<it>.pt src/instinct_mj/scripts/acp/run_stage3.sh
-# resume a stopped run of the same stage
-RESUME_CKPT=/abs/path/model_<it>.pt src/instinct_mj/scripts/acp/run_stage1.sh
-# ACP_FOREGROUND=1 runs in the foreground instead of systemd-run; UNIT, LOG, EXPERIMENT_NAME, SAVE_INTERVAL, MEMORY_MAX are overridable
+# resume a stopped run: RESUME_CKPT=/abs/path/model_<it>.pt; ACP_FOREGROUND=1 runs without systemd-run
 
 # per-clip evaluation from the clip start
 ACP_DATASET=/path/to/dataset uv run --no-sync python -m instinct_mj.scripts.acp.eval_tracker <run>/model_<it>.pt --mode robust --out eval.json
@@ -97,8 +65,8 @@ ACP_DATASET=/path/to/dataset uv run --no-sync python -m instinct_mj.scripts.acp.
 uv run --no-sync python webplay_acp.py policy --checkpoint <run>/model_<it>.pt --dataset /path/to/dataset --port 8192
 ```
 
-Runs are written to `logs/instinct_rl/<experiment_name>/`. A checkpoint is `model_<it>.pt` (actor, normalizers, planner; directly
-playable) plus the `acp_state_<it>.pt` sidecar (world model, critics, optimizers, reset bins) needed to resume training.
+Runs are written to `logs/instinct_rl/<experiment_name>/`: `model_<it>.pt` (policy, planner) and the `acp_state_<it>.pt` sidecar
+(world model, critics, optimizers) needed to resume.
 
 ## Code map
 
@@ -121,11 +89,9 @@ The perceptive shadowing parkour tasks trained with SuperMimic (`Instinct-Percep
 
 ## Acknowledgements
 
-This branch builds on **ACP**, on **SuperMimic** (Liao et al., CoRL 2026) and its official release
-[HybridRobotics/supermimic](https://github.com/HybridRobotics/supermimic), whose learning loop the runner follows, and on
-[**supermimic_vibed**](https://github.com/zita-ch/supermimic_vibed) by Chong Zhang (ETH Zurich, MIT License), the open reproduction
-from which the world model, replay buffer, rotation utilities and training loop were first adapted. Many thanks to the authors.
-This branch is not affiliated with the ACP or SuperMimic authors.
+Built on **ACP**, **SuperMimic** (Liao et al., CoRL 2026; [HybridRobotics/supermimic](https://github.com/HybridRobotics/supermimic))
+and [**supermimic_vibed**](https://github.com/zita-ch/supermimic_vibed) by Chong Zhang (ETH Zurich, MIT License). Not affiliated with
+the ACP or SuperMimic authors.
 
 ```bibtex
 @misc{acp2026,
