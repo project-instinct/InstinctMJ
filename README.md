@@ -13,11 +13,11 @@ in [src/instinct_mj/rl/acp/PLAN.md](src/instinct_mj/rl/acp/PLAN.md).
 
 ## Stages
 
-| Stage | Task | Launcher | What is trained |
-|---|---|---|---|
-| 1 | `Instinct-ACP-Track-G1-v1` | `src/instinct_mj/scripts/acp/run_stage1.sh` | the contact-conditioned tracker on the reference contact targets, from scratch |
-| 2 | `Instinct-ACP-Stage2-G1-v1` | `src/instinct_mj/scripts/acp/run_stage2.sh` | the attention contact planner (hindsight labels) while the tracker moves from the reference to the planner's contact commands (`eta_obs` / `eta_rew` schedules) |
-| 3 | `Instinct-ACP-Stage3-G1-v1` | `src/instinct_mj/scripts/acp/run_stage3.sh` | reference tracking and goal reaching with the planner throughout, two critics (Vm, Vfs) |
+| Stage | Task | What is trained |
+|---|---|---|
+| 1 | `Instinct-ACP-Track-G1-v1` | the contact-conditioned tracker on the reference contact targets, from scratch |
+| 2 | `Instinct-ACP-Stage2-G1-v1` | the attention contact planner (hindsight labels) while the tracker moves from the reference to the planner's contact commands |
+| 3 | `Instinct-ACP-Stage3-G1-v1` | reference tracking and goal reaching with the planner throughout, two critics (Vm, Vfs) |
 
 Each stage starts from the previous stage's checkpoint. The play variants (`...-Play-v1`) run the trained policy.
 
@@ -36,7 +36,7 @@ The world-model and policy updates run as CUDA graphs.
 ## Installation
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv is not installed
+curl -LsSf https://astral.sh/uv/install.sh | sh   # or: pip install uv
 uv sync
 ```
 
@@ -46,27 +46,27 @@ uv sync
 
 ## Data
 
-`ACP_DATASET` points to a `TerrainMotion` folder: `metadata.yaml` (motion files, terrain ids, groups), the motion `.npz` files with
-their `.contacts.npz` contact labels, and `terrains/` (STL plus analytic `geoms.yaml`). The datasets are not released with this branch.
+Set `MOTION_FOLDER` in `src/instinct_mj/tasks/acp/config/g1/acp_tracking_cfg.py` to a `TerrainMotion` folder: `metadata.yaml`
+(motion files, terrain ids, groups), the motion `.npz` files with their `.contacts.npz` contact labels, and `terrains/` (STL plus
+analytic `geoms.yaml`). The datasets are not released with this branch.
 
 ## Usage
 
 ```bash
-# Stage 1 (systemd-run unit; every agent parameter is spelled out in the script)
-ACP_DATASET=/path/to/dataset NUM_ENVS=4096 MAX=20000 src/instinct_mj/scripts/acp/run_stage1.sh
-# Stage 2 / 3 from the previous stage
-ACP_DATASET=/path/to/dataset STAGE1_CKPT=/abs/path/model_<it>.pt src/instinct_mj/scripts/acp/run_stage2.sh
-ACP_DATASET=/path/to/dataset STAGE2_CKPT=/abs/path/model_<it>.pt src/instinct_mj/scripts/acp/run_stage3.sh
-# resume a stopped run: RESUME_CKPT=/abs/path/model_<it>.pt; ACP_FOREGROUND=1 runs without systemd-run
+uv run instinct-train Instinct-ACP-Track-G1-v1                                   # Stage 1
+uv run instinct-train Instinct-ACP-Stage2-G1-v1 --agent.load-run <stage1 run dir> --agent.load-checkpoint model_<it>.pt
+uv run instinct-train Instinct-ACP-Stage3-G1-v1 --agent.load-run <stage2 run dir> --agent.load-checkpoint model_<it>.pt
 
 # per-clip evaluation from the clip start
-ACP_DATASET=/path/to/dataset uv run --no-sync python -m instinct_mj.scripts.acp.eval_tracker <run>/model_<it>.pt --mode robust --out eval.json
+uv run python -m instinct_mj.scripts.acp.eval_tracker <run>/model_<it>.pt --mode robust --out eval.json
 # live policy viewer (viser), with the planner's contact targets for Stage 2 / 3 checkpoints
-uv run --no-sync python webplay_acp.py policy --checkpoint <run>/model_<it>.pt --dataset /path/to/dataset --port 8192
+uv run python webplay_acp.py policy --checkpoint <run>/model_<it>.pt --dataset <dataset> --port 8192
 ```
 
-Runs are written to `logs/instinct_rl/<experiment_name>/`: `model_<it>.pt` (policy, planner) and the `acp_state_<it>.pt` sidecar
-(world model, critics, optimizers) needed to resume.
+The defaults are the recommended configuration (Stage 1: 4096 envs, Stages 2 / 3: 2048). Common overrides: `--num-envs`,
+`--agent.max-iterations`, `--agent.save-interval`, `--agent.experiment-name`. A stopped run resumes from its own checkpoint with
+the same `--agent.load-run` / `--agent.load-checkpoint`. Runs are written to `logs/instinct_rl/<experiment_name>/`: `model_<it>.pt`
+(policy, planner) and the `acp_state_<it>.pt` sidecar (world model, critics, optimizers) needed to resume.
 
 ## Code map
 
@@ -75,7 +75,7 @@ Runs are written to `logs/instinct_rl/<experiment_name>/`: `model_<it>.pt` (poli
 - `src/instinct_mj/rl/acp/`: the SuperMimic runner (`runner.py`, `stage3_runner.py`), the analytic MDP of the imagination (`mdp.py`,
   `stage3_mdp.py`), the planner (`planner.py`) and its hindsight training (`stage2.py`, `hindsight.py`), optimizers and CUDA-graph
   updates (`optim.py`), the plan and the paper's numbers (`PLAN.md`).
-- `src/instinct_mj/scripts/acp/`: launchers, evaluation and data tools.
+- `src/instinct_mj/scripts/acp/`: evaluation and data tools.
 - `src/instinct_mj/rl/supermimic/`: the world model and helpers shared with the perceptive shadowing tasks.
 
 When a reward, termination or observation of the env changes, the matching analytic term of the imagination in `rl/acp/mdp.py`

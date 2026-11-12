@@ -16,7 +16,7 @@ class ACPReplayBuffer(ReplayBuffer):
     """Steps of real history an imagination start needs: the pelvis pose history of the odometry model (the proprio histories need 4)."""
     hist_keys = ("s", "a_prev")
 
-    def __init__(self, T: int, N: int, device: str, holdout_envs: float = 0.0):
+    def __init__(self, T: int, N: int, device: str):
         fields = {
             "s": (STATE_DIM, torch.float32),
             "s1": (STATE_DIM, torch.float32),
@@ -40,7 +40,7 @@ class ACPReplayBuffer(ReplayBuffer):
             "odo_drift": (3, torch.float32),  # odometry drift of the episode at s
             "odo_delay": ((), torch.float32),  # odometry delay [s] of the episode at s
         }
-        super().__init__(T, N, NUM_CONTACT, device, holdout_envs, fields=fields)
+        super().__init__(T, N, NUM_CONTACT, device, fields=fields)
         self._version = 0  # mutation counter (``add``): keys the cached complete-window tables
         self._cw_cache = None
 
@@ -57,11 +57,11 @@ class ACPReplayBuffer(ReplayBuffer):
         idx[:, 1] += lo
         return idx
 
-    def sample_windows(self, B: int, k: int, env_range=None, failure_frac: float = 0.0, failure_horizon: int = 16, balance_frac: float = 0.0, failure_first_done: bool = False):
-        """As ``ReplayBuffer.sample_windows``; with ``balance_frac`` > 0 that fraction of the windows is instead drawn clip-balanced: every clip that has a
+    def sample_windows(self, B: int, k: int, env_range=None, balance_frac: float = 0.0):
+        """As ``ReplayBuffer.sample_windows`` (uniform over the buffer); with ``balance_frac`` > 0 that fraction of the windows is instead drawn clip-balanced: every clip that has a
         buffered window start is equally likely, then one of its window starts uniformly (needs ``clip_table``: global frame -> clip, set by the runner).
-        The importance ``weight`` of those windows is 1 (the failure-head weights only undo the failure oversampling)."""
-        out = super().sample_windows(B, k, env_range, failure_frac, failure_horizon, failure_first_done)
+        ``weight`` is 1 for every window."""
+        out = super().sample_windows(B, k, env_range)
         n_bal = int(B * balance_frac)
         if n_bal == 0:
             return out
@@ -146,8 +146,5 @@ class ACPReplayBuffer(ReplayBuffer):
         env = local_env + lo
         rows = self._row(age[:, None] + torch.arange(k, device=self.device))
         result = {key: self.data[key][rows, env[:, None]] for key in self.window_keys}
-        result.update(mask=torch.ones(B, k, device=self.device), env=env, age0=age,
-                      weight=torch.ones(B, device=self.device),
-                      failure_sampled=torch.zeros((), device=self.device),
-                      failure_valid=torch.zeros((), device=self.device))
+        result.update(mask=torch.ones(B, k, device=self.device), env=env, age0=age, weight=torch.ones(B, device=self.device))
         return result

@@ -36,16 +36,11 @@ class ACPRunnerCfg:
     """World-model gradient steps per update (default 10)."""
     wm_batch: int = 2048
     """Windows per world-model batch (default 2048)."""
-    wm_failure_frac: float = 0.25
-    """Failure / termination heads only (the world model itself trains on complete windows): fraction of the head's window batch drawn from windows that start within
-    ``wm_failure_horizon`` steps before a real termination; the heads importance-weight them (default 0.25)."""
-    wm_failure_horizon: int = 16
-    """Steps before a real termination in which a window counts as a failure window (default 16)."""
     wm_balance_frac: float = 0.0
-    """Failure / termination heads only: fraction of the head's window batch drawn clip-balanced (every clip equally likely) instead of uniformly over the buffer
+    """Termination head only (``term_source`` learned / union): fraction of the head's window batch drawn clip-balanced (every clip equally likely) instead of uniformly over the buffer
     (default 0). Track only (the Stage 3 buffer has no reference clip for the goal envs)."""
-    wm_holdout_envs: float = 0.1
-    """Fraction of envs never used for world-model / head training, only for held-out calibration diagnostics (default 0.1)."""
+    term_windows: int = 512
+    """Termination head only: windows (of its own ``wm_batch`` window batch) the head trains on per step; the feature computation runs the FK (default 512)."""
     wm_only_iters: int = 500
     """World-model-only iterations at the start, no policy update (default 500)."""
     wm_physics_inputs: str = ""
@@ -60,40 +55,20 @@ class ACPRunnerCfg:
     """WM-only contact probability feedback: measured at the start, then autoregressive with full gradients. Default off."""
     profile_phases: bool = False
     """Log synchronized collection / WM(+termination head) / policy+critic wall times. Default off."""
-    lazy_exact_heightmap: bool = False
-    """With exact_scan, build the auxiliary bilinear map only if ground_height is used. Exact rays stay unchanged. Default off."""
-
-    # ---- failure head ----
-    fail_head: bool = True
-    """Use the learned failure ("continue") head in imagination, ``d = 1 - (1 - d_analytic) (1 - p_fail)``; the head is trained
-    either way and the gradient through ``p_fail`` is kept (default True)."""
-    fail_head_warmup_iters: int = 300
-    """Iterations after the head was created before it affects the policy; it is trained from the start (default 300)."""
-    fail_windows: int = 512
-    """Windows (of the head's own ``wm_batch`` window batch) that train the failure / termination heads, the feature computation runs the FK (default 512)."""
-    fail_clip: float = 0.95
-    """Upper clip of ``p_fail`` in imagination (default 0.95)."""
-    fail_pos_weight: float = 1.0
-    """BCE positive weight; 1 because the failure oversampling is importance-weighted to keep the head calibrated (default 1.0)."""
+    lazy_exact_heightmap: bool = True
+    """With exact_scan, build the auxiliary bilinear map only if ground_height is used. Exact rays stay unchanged. Default on (Stage 3 sets it to False)."""
 
     # ---- policy / critic ----
     horizon: int = 32
     """Imagination horizon H of the BPTT policy update (default 32)."""
-    pi_batch: int = 1024
+    pi_batch: int = 2048
     """Imagination starts per policy update (default 1024)."""
-    failure_window_fix: bool = False
-    """Failure-head windows (``wm_failure_frac``): a window counts as a failure window only if the FIRST episode end at or after its start within the window is a real termination (default False: any
-    termination in the next rows counts, also one of the NEXT episode, which the loss mask removes). The log has the sampled and the valid failure windows."""
     scan_slope_gradient: bool = False
     """The exact height scan has the slope gradient of the terrain: d(scan)/d(xy, yaw) from the hit normal on the faces (dz/dx = -n_x / n_z, zero for near-vertical faces and misses); default False: the terrain height
     is a constant for the gradient (0 w.r.t. the horizontal position and heading)."""
     soft_term_softness: float = 0.05
     """Softness of the imagined termination: one sigmoid of the largest threshold-normalized error, sigmoid((max_i e_i / theta_i - 1) / softness) (official
     ``WorldModelEnv._compute_term_prob``; the contact-violation hazard is kept; default 0.05)."""
-    imagine_clamp_joints: bool = True
-    """True (default, the old runs): the imagined joint positions are projected onto the hard joint range and the velocities pushing further out are zeroed (``clamp_joints``), which the
-    world-model training rollout does not do and which removes the joint-limit reward and its gradient in the imagination. False: the same transition as the world-model rollout,
-    the joint-limit reward sees the unclamped q; only a wide NaN guard (hard range +- 0.5 rad) remains."""
     term_source: str = "analytic"
     """Termination of the imagined rollouts: "analytic" (default: the env's thresholds as one normalized sigmoid, ``soft_term_softness``), "learned" (SuperMimic paper, Eq. 1-2: d = sigmoid of a termination head
     ``dω(ŝ_t, g_t)`` trained with BCE on the autoregressive k-step windows against the REAL termination labels; the analytic term is not used) or "union" (1 - (1 - d_analytic)(1 - d_learned)). The head
@@ -137,7 +112,7 @@ class ACPRunnerCfg:
     imagine_ref_replay_eps: float = 0.0
     """Demonstration replay in the imagination (DiffMimic, threshold version; default 0 = off): when the largest height deviation of a contact link from the
     reference exceeds this [m] after an imagined step, the NEXT step starts from the reference state of that frame (no gradient through the replacement) instead
-    of the deviated state. The reward of the deviating step is computed on the deviated state; terminations, the failure head and the critic features use the
+    of the deviated state. The reward of the deviating step is computed on the deviated state; terminations, the termination head and the critic features use the
     states that are actually continued from. Track only."""
     imagine_link_hazard_eps: float = 0.0
     """Soft link-deviation hazard in the imagination (default 0 = off): the continuation of every imagined step is combined with
@@ -157,7 +132,7 @@ class ACPRunnerCfg:
     (stop-gradient), e.g. "track_contact_label,contact_acc,joint_torque" (default "": the Stage 1 run). The gradient decomposition of the stuck clips showed
     these terms carrying as much gradient norm as the whole kinematic tracking sum, pointing elsewhere (cosine 0.1-0.2 to it). Track only."""
     pi_lr_scale: float = 1.0
-    """Multiplier of the actor learning rate only (``lr`` is shared by the world model, critic and failure head; default 1)."""
+    """Multiplier of the actor learning rate only (``lr`` is shared by the world model, critic and termination head; default 1)."""
     policy_updates_per_iter: int = 1
     """Policy (BPTT) updates per iteration, each on fresh imagination starts (default 1)."""
     imagine_action_noise: float = 0.0
@@ -267,16 +242,16 @@ class ACPRunnerCfg:
     """``ReturnSampler``: uniform share of the resets."""
     return_keep: float = 0.1
     """``ReturnSampler``: share on the bins in proportion to their summed squared focus."""
-    cuda_graph_wm: bool = False
+    cuda_graph_wm: bool = True
     """Capture the world-model gradient step (rollout, loss, backward, clip, optimizer step) as one CUDA graph after a few eager steps (official ``CapturedUpdate``).
     With ``compile`` the rollout and the loss are compiled in the default mode first and then captured (official: compile, then capture; never "reduce-overhead" inside the
-    capture). Needs no contact-input world model, ``fail_head`` False and ``term_source`` analytic."""
-    cuda_graph_policy: bool = False
+    capture). Needs no contact-input world model and ``term_source`` analytic."""
+    cuda_graph_policy: bool = True
     """Capture the policy update (H-step imagination, return, BPTT backward, gradient clipping, actor optimizer step, critic targets and the critic fit) as one
     CUDA graph after a few eager updates (:class:`CapturedUpdate`), replacing ~2000 kernel launches per update by one replay. The sampling of the imagination starts stays outside
     (its outputs are the graph inputs). The captured update is numerically the eager one, except that a non-finite actor gradient norm skips the actor step on the device
     (restoring parameters and optimizer state) instead of by a host check. Stage 1 only: needs ``cuda_graph_wm``, ``contact_source`` reference without a planner,
-    ``fail_head`` False, ``term_source`` analytic, no wmres / ``imagine_ref_replay_eps`` / ``abpt_one_step_weight`` / ``imagine_link_hazard_eps`` /
+    ``term_source`` analytic, no wmres / ``imagine_ref_replay_eps`` / ``abpt_one_step_weight`` / ``imagine_link_hazard_eps`` /
     ``checkpoint_imagination``. ``step_wm`` is compiled in the default mode (the outer graph replaces "reduce-overhead"). Re-recorded when the learning rate changes by more than 0.5 %."""
     norm_after_collect: bool = False
     """Update the policy / WM normalizer statistics after the collection of an iteration from the queued real data (official ``_flush_normalization``)."""

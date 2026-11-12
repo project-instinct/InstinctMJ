@@ -46,3 +46,5 @@ webplay_hoi.py
 
 # ACP reference viewer (local tool, not part of the repository)
 /acp_player/
+# local launchers (systemd-run, local paths), not part of the repository
+/src/instinct_mj/scripts/acp/run_stage*.sh

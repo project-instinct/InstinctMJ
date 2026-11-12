@@ -42,7 +42,7 @@ from tensorboardX import SummaryWriter
 from instinct_mj.rl.supermimic import networks
 from instinct_mj.rl.supermimic.mdp import flatten_state, unflatten_state
 from instinct_mj.rl.supermimic.rotations import mat_to_quat
-from instinct_mj.rl.supermimic.networks import Critic, FailureHead, WorldModel
+from instinct_mj.rl.supermimic.networks import Critic, WorldModel
 from instinct_mj.rl.supermimic.runner import CONTACT_LOSS_WEIGHT
 
 from instinct_mj.tasks.acp.mdp.commands import yaw_of_quat
@@ -238,8 +238,8 @@ class ACPRunner:
         print(f"[schedule] replay_ratio {c['replay_ratio']}: utd = {self.utd:.4f} updates per vectorized step ({self.N} envs)", flush=True)
         if c["soft_term_softness"] <= 0:
             raise ValueError(f"soft_term_softness must be > 0, got {c['soft_term_softness']}")
-        if c["cuda_graph_wm"] and (c["wm_ref_contacts"] or c["wm_contact_feedback"] or c["fail_head"] or c["term_source"] != "analytic"):
-            raise ValueError("cuda_graph_wm needs no contact-input world model, fail_head=False, term_source='analytic'")
+        if c["cuda_graph_wm"] and (c["wm_ref_contacts"] or c["wm_contact_feedback"] or c["term_source"] != "analytic"):
+            raise ValueError("cuda_graph_wm needs no contact-input world model, term_source='analytic'")
         if c.get("cuda_graph_policy", False):
             self.check_policy_graph_options()
         if c["term_source"] not in ("analytic", "learned", "union"):
@@ -314,9 +314,6 @@ class ACPRunner:
         self.opt_wm = MuonAdam([self.wm], c["lr"])
         self.opt_v = MuonAdam([self.critic], c["lr"])
         self.v_max = None  # the analytic value bound of the current objective (set by every policy update)
-        self.fail_head = FailureHead(self.mdp.critic_dim()).to(device)
-        self.opt_fail = torch.optim.Adam(self.fail_head.parameters(), lr=c["lr"])
-        self.fail_head_start_it = 0
         # the inputs contain exact height scans: floor the scan std of the input normalizers (see ScanFloorRunningNorm; no clipping)
         wm_scan = slice(self.wm.in_dim - self.mdp.critic_scan_dim - ACT_DIM - wm_extra, self.wm.in_dim - ACT_DIM - wm_extra)
         critic_scan = slice(self.mdp.critic_dim() - self.mdp.xi_dim - self.mdp.critic_scan_dim, self.mdp.critic_dim() - self.mdp.xi_dim)
@@ -324,7 +321,6 @@ class ACPRunner:
             self.wm.in_norm = ScanFloorRunningNorm(self.wm.in_dim, wm_scan).to(device)
         xi0 = 12 + 3 * NUM_J  # WM inputs: invariant state (12 + 2 NUM_J), action (NUM_J), xi_n, context
         self.wm.in_norm.set_passthrough(slice(xi0, xi0 + self.mdp.xi_dim))  # the DR context enters the WM as encoded by its ranges (no second, running normalization)
-        self.fail_head.norm = ScanFloorRunningNorm(self.mdp.critic_dim(), critic_scan).to(device)
         # learned termination head d_ω(ŝ, g) (SuperMimic Sec. 3.2) of the "learned" / "union" imagination: built (and trained) only then, so the default runs consume the same random numbers as before
         self.term_head = self.opt_term = None
         if c["term_source"] != "analytic":
@@ -400,9 +396,9 @@ class ACPRunner:
         if self.resume_path is not None:
             self._load_sidecar(self.resume_path)
             planner_opt = [self.planner_trainer.opt] if self.planner_trainer is not None else []  # (its counters too: 70 syncs per optimizer step otherwise)
-            for opt in (self.opt_fail, *([self.opt_term] if self.opt_term is not None else [])):
+            for opt in ([self.opt_term] if self.opt_term is not None else []):
                 set_lr(opt, c["lr"])  # (the learning rate is constant: not the one stored in the checkpoint, e.g. of a run with the former cosine decay)
-            for opt in (self.opt_fail, *planner_opt, *([self.opt_term] if self.opt_term is not None else [])):  # the Adam step counters were saved as CUDA tensors: back on the CPU (a CUDA counter makes every step sync); the capturable MuonAdam of the WM / actor / critic keeps them on the device
+            for opt in (*planner_opt, *([self.opt_term] if self.opt_term is not None else [])):  # the Adam step counters were saved as CUDA tensors: back on the CPU (a CUDA counter makes every step sync); the capturable MuonAdam of the WM / actor / critic keeps them on the device
                 for state in opt.state.values():
                     if "step" in state:
                         state["step"] = state["step"].cpu()
@@ -429,7 +425,7 @@ class ACPRunner:
 
     def make_buffer(self) -> ACPReplayBuffer:
         c = self.cfg
-        return ACPReplayBuffer(c["buffer_steps"], self.N, self.device, c["wm_holdout_envs"])
+        return ACPReplayBuffer(c["buffer_steps"], self.N, self.device)
 
     def make_replay(self) -> PartitionedReplay:
         c = self.cfg
@@ -454,8 +450,8 @@ class ACPRunner:
         return dict(is_goal=torch.zeros(self.N, dtype=torch.bool, device=self.device), phase=progress.clamp(0.0, 1.0), goal_xy=zeros, goal_dz=zeros,
                     terrain_type=ctx["ref_type"], tile=ctx["ref_tile"])  # fmt: skip
 
-    def fail_head_windows(self, w: dict, limit: int) -> torch.Tensor:
-        """Indices of the (at most ``limit``) sampled windows the failure head trains on / is calibrated with."""
+    def term_head_windows(self, w: dict, limit: int) -> torch.Tensor:
+        """Indices of the (at most ``limit``) sampled windows the termination head trains on."""
         return torch.arange(min(limit, w["mask"].shape[0]), device=self.device)
 
     # ------------------------------------------------------------------------------------------------
@@ -580,16 +576,12 @@ class ACPRunner:
                 t27 = torch.where(use_planner_tgt[0].unsqueeze(-1), use_planner_tgt[1].flatten(1), t27)
             return mdp.policy_obs(o_hist, mdp.noisy_tracker_scan(mdp.tracker_scan(scan)), t27, goal_noisy)
 
-        clamp_joints = self.cfg["imagine_clamp_joints"]
-
         def _step_wm(S, fk, a, a_prev, xi_n, cmd=None, contact0=None):
             """One world-model step from ``S`` (``fk``: its ``kin.forward_all``) on the raw policy action. Returns the action, the predicted state, ITS ``kin.forward_all``
             (the next step's ``fk``; the sdf contact needs it anyway), the contact logits and the hard joint-limit violation."""
             ctx = _ctx(S, a, a_prev, xi_n, cmd, contact0, fk) if self.wm_contact_spec else _ctx(S, a, a_prev, xi_n, fk=fk)
             S1, logits, _ = wm.step(S, mdp.pad(a), xi_n, ctx)
-            hard = mdp.joint_violation(S1[4])[1]  # fraction of the predicted joint positions beyond the hard range, before the clamp
-            if clamp_joints:
-                S1 = mdp.clamp_joints(S1, 0.0)
+            hard = mdp.joint_violation(S1[4])[1]  # fraction of the predicted joint positions beyond the hard range
             fk1 = kin.forward_all(*S1)
             if self.sdf is not None:  # sdf mode: the logits of the contact probabilities are -(d_b - d_on_b) / tau of the predicted state (replaces the head's output)
                 logits = self.sdf.logits(self.sdf.distance(fk1[0][:, :NUM_CONTACT], fk1[1][:, :NUM_CONTACT]))
@@ -863,58 +855,31 @@ class ACPRunner:
 
     def wm_update(self):
         """One world-model gradient step (official ``WorldModelLearner``) on a batch of complete k-step windows (no episode end inside; the last transition may end), plus the
-        contact-head BCE. With a failure / termination head, a second batch of masked windows (failure oversampling ``wm_failure_frac``, clip balancing ``wm_balance_frac``) is
-        rolled out without gradient and trains the heads on the predicted states."""
+        contact-head BCE. With a termination head, a second batch of masked windows (uniform over the buffer, clip balancing ``wm_balance_frac``) is
+        rolled out without gradient and trains the head on the predicted states."""
         c = self.cfg
-        w = self.buffer.sample_complete_windows(c["wm_batch"], c["wm_window"], self.buffer.train_envs)
+        w = self.buffer.sample_complete_windows(c["wm_batch"], c["wm_window"])
         if w is None:  # no env has a complete window yet (episodes shorter than the window): no update; ``learn`` keeps collecting (the head windows below need no extra check)
             self._report_no_complete_window()
             return None
         xi_n = self.mdp.normalize_xi(self.xi_of(w["env"], w["xi_dyn"][:, 0]))
-        zero = torch.zeros((), device=self.device)
         if c["cuda_graph_wm"]:
             out_g = self._captured_wm({"s": w["s"], "a": w["a"], "a_prev": w["a_prev"], "xi_n": xi_n, "s1": w["s1"], "contact": w["contact"], "mask": w["mask"]})
-            return {"wm": out_g["loss"].clone(), "wm8": out_g["e_last"].mean(), "bce": out_g["bce"].detach().clone(), "fail_win_sampled": zero, "fail_win_valid": zero}
+            return {"wm": out_g["loss"].clone(), "wm8": out_g["e_last"].mean(), "bce": out_g["bce"].detach().clone()}
         S_hat, logits = self._rollout_windows(w, xi_n)
         loss, (e_last, bce) = self.wm_err(S_hat, logits, w["s1"], w["contact"], w["mask"])
         self.opt_wm.zero_grad(set_to_none=True)
         loss.backward()
         nn.utils.clip_grad_norm_(self.wm.parameters(), 1.0)
         self.opt_wm.step()
-        out = {"wm": loss.detach(), "wm8": e_last.detach().mean(), "bce": bce.detach(), "fail_win_sampled": zero, "fail_win_valid": zero}
-        if self.term_head is None and not c["fail_head"]:  # no head: no extra windows
+        out = {"wm": loss.detach(), "wm8": e_last.detach().mean(), "bce": bce.detach()}
+        if self.term_head is None:  # no head: no extra windows
             return out
-        w = self.buffer.sample_windows(c["wm_batch"], c["wm_window"], self.buffer.train_envs, c["wm_failure_frac"], c["wm_failure_horizon"], c["wm_balance_frac"], c["failure_window_fix"])
+        w = self.buffer.sample_windows(c["wm_batch"], c["wm_window"], None, c["wm_balance_frac"])
         xi_n = self.mdp.normalize_xi(self.xi_of(w["env"], w["xi_dyn"][:, 0]))
         with torch.no_grad():
             S_hat, _ = self._rollout_windows(w, xi_n)
-        out.update(fail_win_sampled=w["failure_sampled"], fail_win_valid=w["failure_valid"])
-        k = w["mask"].shape[1]
-        if self.term_head is not None:
-            out.update(self.term_update(w, S_hat, xi_n))
-        if not c["fail_head"]:  # the head is not used: no training step
-            return out
-        # failure ("continue") head on TRUE and (detached) WM-PREDICTED states of the windows, importance-weighted
-        sel = self.fail_head_windows(w, c["fail_windows"])
-        Bf = len(sel)
-        with torch.no_grad():
-            flat_f = lambda x: x[sel].flatten(0, 1)  # noqa: E731
-            xn = xi_n[sel].unsqueeze(1).expand(Bf, k, -1).flatten(0, 1)
-            g1 = flat_f(w["goal1"])
-            args_f = (flat_f(w["f1"]), flat_f(w["phase1"]), flat_f(w["origin1"]), xn, g1[:, :3], g1[:, 3])
-            X_true = self.critic_input(unflatten_state(flat_f(w["s1"])), *args_f)
-            X_pred = self.critic_input(tuple(flat_f(x) for x in S_hat), *args_f)
-            self.fail_head.norm.update(X_true)
-        label = flat_f(w["terminated"]).float()
-        weight = (w["mask"][sel] * w["weight"][sel, None]).flatten()
-        pos_weight = torch.where(label > 0.5, c["fail_pos_weight"], 1.0)
-        head_loss = lambda X: (F.binary_cross_entropy_with_logits(self.fail_head(X), label, reduction="none") * pos_weight * weight).sum() / weight.sum().clamp(min=1e-6)  # noqa: E731
-        fail_loss = head_loss(X_true) + head_loss(X_pred)
-        self.opt_fail.zero_grad(set_to_none=True)
-        fail_loss.backward()
-        nn.utils.clip_grad_norm_(self.fail_head.parameters(), 1.0)
-        self.opt_fail.step()
-        out["fail_loss"], out["fail_batch_pos"] = fail_loss.detach() / 2, (label * w["mask"][sel].flatten()).sum() / w["mask"][sel].sum().clamp(min=1)
+        out.update(self.term_update(w, S_hat, xi_n))
         return out
 
     def _report_no_complete_window(self) -> None:
@@ -922,7 +887,7 @@ class ACPRunner:
         n = self.num_skipped_iterations = getattr(self, "num_skipped_iterations", 0) + 1
         if n == 1 or n % 50 == 0:
             print(f"[wm] it {self.it}: no complete {self.cfg['wm_window']}-transition window in the replay buffer: world-model and policy updates skipped (the iteration does not count), "
-                  f"collecting on ({n} skipped so far; {self.buffer.episode_length_stats(self.buffer.train_envs)})", flush=True)
+                  f"collecting on ({n} skipped so far; {self.buffer.episode_length_stats()})", flush=True)
 
     def _rollout_windows(self, w: dict, xi_n: torch.Tensor):
         """Autoregressive k-step rollout of the world model from the first state of every window: predicted states and contact logits (B, k, ...)."""
@@ -944,10 +909,9 @@ class ACPRunner:
         """One Adam step of the termination head on the autoregressively PREDICTED states of the world-model windows (SuperMimic Eq. 1: BCE(d̂_j, d_j) on the rollout states; the paper's
         loss is unweighted). Labels: the REAL termination of the transition (``terminated``: no time-out, clip end or episode cap), the features those of ``critic_input`` at the predicted next state
         with the reference frame / goal of that step. ACP-unspecified: (i) the predicted states are detached (the head does not reshape the dynamics; its gradient reaches the policy through
-        the imagination only), (ii) the window oversampling of ``wm_failure_frac`` is undone with the buffer's importance weights (the paper samples uniformly), (iii) at most ``fail_windows`` windows
-        per step (the feature computation runs the forward kinematics and the scan), (iv) the mean over the weighted steps instead of the sum (Adam is scale-invariant)."""
+        the imagination only), (ii) at most ``term_windows`` windows per step (the feature computation runs the forward kinematics and the scan), (iii) the mean over the weighted steps instead of the sum (Adam is scale-invariant)."""
         c, k = self.cfg, w["mask"].shape[1]
-        sel = self.fail_head_windows(w, c["fail_windows"])
+        sel = self.term_head_windows(w, c["term_windows"])
         Bf = len(sel)
         with torch.no_grad():
             flat_f = lambda x: x[sel].flatten(0, 1)  # noqa: E731
@@ -965,11 +929,6 @@ class ACPRunner:
         self.opt_term.step()
         valid = w["mask"][sel].flatten()
         return {"term_bce": loss.detach(), "term_pos": (label * valid).sum() / valid.sum().clamp(min=1), "term_pred": (torch.sigmoid(logits.detach()) * valid).sum() / valid.sum().clamp(min=1)}
-
-    def head_features_needed(self) -> bool:
-        """Whether the learned heads (termination / failure) read the critic features of the imagined states in this update."""
-        c = self.cfg
-        return c["term_source"] != "analytic" or (c["fail_head"] and self.it >= self.fail_head_start_it + c["fail_head_warmup_iters"])
 
     def apply_term_source(self, d: torch.Tensor, X: torch.Tensor | None) -> tuple[torch.Tensor, dict]:
         """Imagined termination probability ``d`` (analytic, (H*B,)) -> the one of ``term_source``: "learned" the head's sigmoid (the paper's ``d̂``; the analytic one is dropped), "union"
@@ -1156,8 +1115,8 @@ class ACPRunner:
             bad.append("cuda_graph_wm must be True (the eager world-model update would run reduce-overhead cudagraph trees next to the policy graph)")
         if c["contact_source"] != "reference" and getattr(self, "planner", None) is None:
             bad.append("contact_source other than 'reference' needs the planner")
-        if c["fail_head"] or c["term_source"] != "analytic":
-            bad.append("fail_head must be False and term_source 'analytic'")
+        if c["term_source"] != "analytic":
+            bad.append("term_source must be 'analytic'")
         if c["wmres_cut"] or c["wmres_cap_clips"]:
             bad.append("wmres_cut / wmres_cap_clips must be off (data-dependent shapes)")
         if c["imagine_ref_replay_eps"] > 0 or c["imagine_link_hazard_eps"] > 0 or c["abpt_one_step_weight"] > 0:
@@ -1218,7 +1177,7 @@ class ACPRunner:
         B, HZ = c["pi_batch"], self.horizon
         graph = getattr(self, "_captured_policy", None) is not None  # the capture-safe variants of the host-synchronizing steps below
         v_max = self.v_max if graph_eta is None or graph_eta[2] < 2 else graph_eta[3]  # (mode 2: eta_rew changes every iteration of the annealing, so does the bound)
-        frozen = (self.wm, self.critic, self.fail_head, *([self.term_head] if self.term_head is not None else []))
+        frozen = (self.wm, self.critic, *([self.term_head] if self.term_head is not None else []))
         for m_ in frozen:
             for p_ in m_.parameters():
                 p_.requires_grad_(False)
@@ -1232,7 +1191,7 @@ class ACPRunner:
         rep = lambda x: x.unsqueeze(0).expand(HZ, *x.shape).flatten(0, 1)  # noqa: E731
         S_all = tuple(flat([St[i] for St in Ss]) for i in range(6))
         replay = c["imagine_ref_replay_eps"] > 0
-        Sc = im["Su"] if replay else Ss  # the states the rollout continued from (the reference where it was replaced): terminations, failure head, critic
+        Sc = im["Su"] if replay else Ss  # the states the rollout continued from (the reference where it was replaced): terminations, termination head, critic
         S_cont = tuple(flat([St[i] for St in Sc]) for i in range(6))
         flat_fk = lambda fks: tuple(torch.stack([F[i] for F in fks]).flatten(0, 1) for i in range(4))  # noqa: E731  (kin.forward_all of the imagined states, flattened like S_all)
         fk_all, fk_cont = flat_fk(im["Fk"]), flat_fk(im["Fkc"])  # the FK of S_all / S_cont, computed once by the imagination
@@ -1248,9 +1207,9 @@ class ACPRunner:
         if c["imagine_link_hazard_eps"] > 0:  # leaving the reference by more than eps is a failure in the imagination too (as the injection of the real env)
             d = 1 - (1 - d) * (1 - torch.sigmoid((mdp.link_deviation(S_all, flat(Fs), rep(origin), fk_all) - c["imagine_link_hazard_eps"]) / c["imagine_link_hazard_tau"]))
         G1 = torch.stack(Gs[1:]).flatten(0, 1)
-        # critic features of the states 1..H (S_cont, frames Fs, goals Gs[1:]): one differentiable evaluation serves the termination / failure heads, the critic
-        # bootstraps and (detached) the critic fit. Only when a head reads them: otherwise the bootstraps evaluate their few rows, the fit all states, directly.
-        X1 = self.critic_input(S_cont, flat(Fs), rep(phase), rep(origin), rep(xi_n), G1[:, :3], G1[:, 3], fk_cont) if self.head_features_needed() else None
+        # critic features of the states 1..H (S_cont, frames Fs, goals Gs[1:]): one differentiable evaluation serves the termination head, the critic
+        # bootstraps and (detached) the critic fit. Only when the head reads them: otherwise the bootstraps evaluate their few rows, the fit all states, directly.
+        X1 = self.critic_input(S_cont, flat(Fs), rep(phase), rep(origin), rep(xi_n), G1[:, :3], G1[:, 3], fk_cont) if c["term_source"] != "analytic" else None
 
         def feats_at(rows):  # critic_input of rows of the flattened states 1..H (rows: slice or index tensor)
             if X1 is not None:
@@ -1259,11 +1218,6 @@ class ACPRunner:
                                      tuple(x[rows] for x in fk_cont))  # fmt: skip
 
         d, term_stats = self.apply_term_source(d, X1)
-        p_fail_mean = torch.zeros((), device=dev)
-        if c["fail_head"] and self.it >= self.fail_head_start_it + c["fail_head_warmup_iters"]:
-            p_fail = torch.sigmoid(self.fail_head(X1)).clamp(max=c["fail_clip"])
-            d = 1 - (1 - d) * (1 - p_fail)
-            p_fail_mean = p_fail.detach().mean()
         r, d = r.view(HZ, B), d.view(HZ, B)
         if graph:  # (the backward of ``torch.cumprod`` synchronizes with the host: .any().item() on the zeros of the input)
             alive = torch.stack(list(itertools.accumulate((1 - d).unbind(0), torch.mul)))
@@ -1325,15 +1279,14 @@ class ACPRunner:
                     nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
                     self.opt_v.step()
         term_means = {k: v.detach().view(HZ, B).mean() for k, v in terms.items()}
-        term_means["p_fail_mean"] = p_fail_mean
         term_means.update(term_stats)
         if cut_stats is not None:  # wmres: cut_frac_starts / cut_frac_steps / cut_step_mean / cut_skipped of this update
             term_means.update(cut_stats)
         if replay:
             term_means["replaced_frac"] = torch.stack(im["Reps"]).float().mean()  # share of the imagined steps that were continued from the reference
         with torch.no_grad():
-            term_means["jl_soft"] = mdp.joint_violation(S_all[4])[0]  # fraction of controlled joints beyond the soft limits (after the clamp)
-            term_means["jl_hard_preclamp"] = torch.stack(im["Hard"]).mean()  # ... beyond the hard range BEFORE the clamp
+            term_means["jl_soft"] = mdp.joint_violation(S_all[4])[0]  # fraction of controlled joints beyond the soft limits
+            term_means["jl_hard"] = torch.stack(im["Hard"]).mean()  # ... beyond the hard range
         return loss.detach(), v_loss.detach(), (r_sum / HZ / mdp.dt).mean(), gn.detach(), cT.mean().detach(), term_means
 
     # ------------------------------------------------------------------------------------------------
@@ -1350,8 +1303,8 @@ class ACPRunner:
         t_log = time.time()
         step_acc = 0.0
         phase_times = []
-        wm_keys = ("wm", "wm8", "bce", "fail_win_sampled", "fail_win_valid", *(("fail_loss", "fail_batch_pos") if c["fail_head"] else ()), *(("term_bce", "term_pos", "term_pred") if self.term_head is not None else ()))
-        agg: dict[str, list] = {k: [] for k in ("wm", "wm8", "bce", "fail_win_sampled", "fail_win_valid", "fail_loss", "fail_batch_pos", "pi", "v", "ir", "gn", "surv", "term_bce", "term_pos", "term_pred")}
+        wm_keys = ("wm", "wm8", "bce", *(("term_bce", "term_pos", "term_pred") if self.term_head is not None else ()))
+        agg: dict[str, list] = {k: [] for k in ("wm", "wm8", "bce", "pi", "v", "ir", "gn", "surv", "term_bce", "term_pos", "term_pred")}
         terms_acc: dict[str, list] = {}
         planner_acc: dict[str, list] = {}
         while self.it < num_learning_iterations:
@@ -1389,7 +1342,7 @@ class ACPRunner:
                 self._skipped_streak += 1
                 if self._skipped_streak >= self.MAX_SKIPPED_STREAK:
                     raise RuntimeError(f"{self._skipped_streak} consecutive iterations (it {self.it}, {self.num_skipped_iterations} skipped in total) without a complete {c['wm_window']}-transition "
-                                       f"window in the replay buffer: no world-model / policy update is possible. Episode lengths in the replay buffer: {self.buffer.episode_length_stats(self.buffer.train_envs)}")
+                                       f"window in the replay buffer: no world-model / policy update is possible. Episode lengths in the replay buffer: {self.buffer.episode_length_stats()}")
                 continue
             self._skipped_streak = 0
             if it >= c["wm_only_iters"]:  # (no policy update without a world-model update)
@@ -1412,8 +1365,6 @@ class ACPRunner:
                 term_frac = float(sum(stats_h["term"]) / max(sum(stats_h["done"]), 1))
                 row = {
                     "wm/loss": mean(agg_h["wm"]), "wm/err_8step": mean(agg_h["wm8"]), "wm/contact_bce": mean(agg_h["bce"]),
-                    "wm/failure_windows_sampled": mean(agg_h["fail_win_sampled"]), "wm/failure_windows_valid": mean(agg_h["fail_win_valid"]),
-                    "fail/bce_train": mean(agg_h["fail_loss"]), "fail/positive_share_in_batch": mean(agg_h["fail_batch_pos"]),
                     "policy/loss": mean(agg_h["pi"]), "policy/grad_norm": mean(agg_h["gn"]), "critic/value_loss": mean(agg_h["v"]),
                     "imagination/reward": mean(agg_h["ir"]), "imagination/survival": mean(agg_h["surv"]),
                     "sim/episode_length": mean(stats_h["ep_len"]), "sim/terminated_fraction": term_frac,
@@ -1507,7 +1458,7 @@ class ACPRunner:
         self.git_status_repos.append(repo_path)
 
     def save(self, path: str, infos=None) -> None:
-        """``path``: ``OnPolicyRunner`` checkpoint format (directly playable). Sidecar: world model, failure head, critic, their optimizers
+        """``path``: ``OnPolicyRunner`` checkpoint format (directly playable). Sidecar: world model, critic, their optimizers
         and the training state (resume)."""
         run_state_dict = {"model_state_dict": self.ac.state_dict(), "optimizer_state_dict": self.opt_pi.state_dict()}
         run_state_dict.update({f"{group}_normalizer_state_dict": n.state_dict() for group, n in self.normalizers.items()})
@@ -1520,7 +1471,6 @@ class ACPRunner:
             "opt_wm": self.opt_wm.state_dict(), "opt_v": self.opt_v.state_dict(), "iteration": self.it,
             "wall_time": self.wall_offset, "sim_steps": self.sim_steps, "cfg": self.cfg,
             "xi_mean": self.mdp.xi_mean, "xi_scale": self.mdp.xi_scale,
-            "fail_head": self.fail_head.state_dict(), "opt_fail": self.opt_fail.state_dict(), "fail_head_start_it": self.fail_head_start_it,
             "motion_names": self.motion_names,
             **({"return_count": self.reset_bins.count, "return_effort": self.reset_bins.effort} if self.cfg["return_resume_stats"] and self.reset_bins is not None else {}),
             **({"bin_G": self.reset_bins.bin_G, "bin_w_avg": self.reset_bins.bin_w_avg, "bin_clip": self.reset_bins.bin_clip, "bin_local": self.reset_bins.bin_local, "bins_v2": self.reset_bins.v2} if self.reset_bins is not None else {}),
@@ -1570,8 +1520,6 @@ class ACPRunner:
         assert self.checkpoint_it == ck["iteration"]
         if not (torch.allclose(ck["xi_mean"].to(self.device), self.mdp.xi_mean) and torch.allclose(ck["xi_scale"].to(self.device), self.mdp.xi_scale)):  # the encoding is fixed by the env's DR ranges
             raise ValueError("the sidecar's xi encoding differs from the DR ranges of this env (another DR config, or a checkpoint from before the DR-range encoding)")
-        self.fail_head.load_state_dict(ck["fail_head"]), self.opt_fail.load_state_dict(ck["opt_fail"])
-        self.fail_head_start_it = ck["fail_head_start_it"]
         bins = self.reset_bins
         if bins is not None and "motion_names" in ck:
             # the same dataset (same clip list in the same order) is matched by position, so stems repeated in different folders

@@ -298,16 +298,6 @@ class ACPMDP:
         return torch.stack((c, -s, o, s, c, o, o, o, one), -1).reshape(yaw.shape + (3, 3))
 
     # ---------------- joint range ----------------
-    def clamp_joints(self, S: tuple, margin: float = 0.0) -> tuple:
-        """MuJoCo enforces the hard joint range as a constraint: a predicted joint position beyond it is put on the range and a velocity
-        pushing further out is removed (plain clamp; the gradient of a saturated joint is zero, as in the simulator). ``margin``: the range is widened by it (a NaN guard
-        when the imagination does not project: ``imagine_clamp_joints=False``)."""
-        p, R, v, w, q, qd = S
-        hi, lo = self.hard_hi + margin, self.hard_lo - margin
-        qc = torch.maximum(torch.minimum(q, hi), lo)
-        out = ((q > hi) & (qd > 0)) | ((q < lo) & (qd < 0))
-        return p, R, v, w, qc, torch.where(out, torch.zeros_like(qd), qd)
-
     def joint_violation(self, q: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Fraction of (sample, controlled joint) pairs beyond the soft limits of the reward and beyond the hard range."""
         qa = q[..., self.act_ids]

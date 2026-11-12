@@ -13,13 +13,13 @@ planner trained in parallel on hindsight labels) for the mixed env ``Instinct-AC
   (``ACPStage3MDP.reward_mixed``: indicator gates relaxed to sigmoids, ``stumbling`` from the learned ``StumbleHead``: the world model predicts
   no forces, so a head trained on the real stumbling indicators of the goal envs predicts them from the state and the action) and
   the termination is the soft fall (``goal_termination``). The planner is frozen in imagination (``eta_obs = eta_rew = 1``).
-* The world model trains on the windows of all envs; the failure head (a function of reference features) only on the reference envs.
+* The world model trains on the windows of all envs; the termination head (a function of reference features) only on the reference envs.
 * Goal-reaching episodes are recorded for the planner: a goal episode is admitted when it got within 0.5 m horizontally at a base height
   within 0.1 m of the goal, truncated at the first step within 0.2 m, and stored in the goal partition of the replay keyed by (terrain type,
   difficulty level) with quality-based eviction (positive mechanical work per distance); the batches mix both partitions proportionally.
 
-Collection, recording and the failure-head windows use the extension points of ``ACPRunner`` (``build_analytic_mdp``, ``make_buffer``,
-``make_replay``, ``step_context``, ``buffer_fields``, ``before_reset``, ``recorder_fields``, ``fail_head_windows``).
+Collection, recording and the termination-head windows use the extension points of ``ACPRunner`` (``build_analytic_mdp``, ``make_buffer``,
+``make_replay``, ``step_context``, ``buffer_fields``, ``before_reset``, ``recorder_fields``, ``term_head_windows``).
 """
 
 from __future__ import annotations
@@ -96,8 +96,8 @@ class ACPStage3Buffer(ACPReplayBuffer):
 
     start_keys = ACPReplayBuffer.start_keys + ("tile", "contact_prev")
 
-    def __init__(self, T: int, N: int, device: str, holdout_envs: float, is_goal: torch.Tensor):
-        super().__init__(T, N, device, holdout_envs)
+    def __init__(self, T: int, N: int, device: str, is_goal: torch.Tensor):
+        super().__init__(T, N, device)
         self.data["tile"] = torch.zeros(T, N, dtype=torch.long, device=device)
         self.data["contact_prev"] = torch.zeros(T, N, NUM_CONTACT, device=device)
         self.data["stumble"] = torch.zeros(T, N, NUM_CONTACT, device=device)
@@ -133,13 +133,7 @@ class ACPStage3Runner(ACPRunner):
         self.v_max_goal = None  # analytic value bound of the goal-reaching objective (Vfs); ``self.v_max`` is the one of the reference objective (Vm)
         self.stumble_head = StumbleHead().to(device)
         self.opt_stumble = torch.optim.Adam(self.stumble_head.parameters(), lr=c["stumble_lr"])
-        self.stumble_envs = (self.is_goal.nonzero(as_tuple=False).squeeze(-1))
-        goal_envs = self.stumble_envs
-        self.stumble_envs = goal_envs[goal_envs < self.buffer.train_envs[1]]  # goal envs that are not held out
-        self.stumble_eval_envs = goal_envs[goal_envs >= self.buffer.train_envs[1]]  # held-out goal envs (all goal envs when nothing is held out)
-        self.stumble_eval_envs_held_out = len(self.stumble_eval_envs) > 0
-        if not self.stumble_eval_envs_held_out:
-            self.stumble_eval_envs = goal_envs
+        self.stumble_envs = self.stumble_eval_envs = self.is_goal.nonzero(as_tuple=False).squeeze(-1)  # all goal envs train the head and are evaluated
         self.ret_std: dict[str, torch.Tensor | None] = {"ref": None, "goal": None}
         self.contact_prev = torch.zeros(self.N, NUM_CONTACT, device=device)
         self.robot = self.unwrapped.scene["robot"]
@@ -149,7 +143,7 @@ class ACPStage3Runner(ACPRunner):
             self._load_stage3_sidecar(self.resume_path)
 
     # ------------------------------------------------------------------------------------------------
-    # extension points of ``ACPRunner`` (collection, recording, world-model / failure-head windows)
+    # extension points of ``ACPRunner`` (collection, recording, world-model / termination-head windows)
     def uses_env_reward(self) -> bool:
         """Stage 3 starts the reference envs at phase 0 (``episode_start`` mode "start", no reset bins): the env reward (and its planner-term sync) only fills the buffer's ``r``
         field, which nothing reads, so the reward manager is not evaluated (~17 % of an env step at 2048 envs)."""
@@ -167,7 +161,7 @@ class ACPStage3Runner(ACPRunner):
 
     def make_buffer(self) -> ACPStage3Buffer:
         c = self.cfg
-        return ACPStage3Buffer(c["buffer_steps"], self.N, self.device, c["wm_holdout_envs"], self.is_goal)
+        return ACPStage3Buffer(c["buffer_steps"], self.N, self.device, self.is_goal)
 
     def make_replay(self) -> PartitionedReplay:
         c = self.cfg
@@ -235,8 +229,7 @@ class ACPStage3Runner(ACPRunner):
 
     @torch.no_grad()
     def stumble_eval(self) -> dict:
-        """Validity of the stumbling head on the newest ``stumble_eval_states`` buffered transitions of the held-out goal envs (the training goal
-        envs when nothing is held out: the keys then say ``train``), evaluated in chunks: tie-aware AUROC and average precision of the predicted link
+        """Validity of the stumbling head on the newest ``stumble_eval_states`` buffered transitions of the goal envs (keys ``goal/stumble_train_*``), evaluated in chunks: tie-aware AUROC and average precision of the predicted link
         probabilities against the measured indicators (and the numbers of positives / samples), the mean prediction on positives / negatives, the
         predicted vs true rate per terrain type. A constant output would match the overall rate (the base rate is ~0.4 %), so the ranking metrics
         are the evidence, not the rate."""
@@ -254,7 +247,7 @@ class ACPStage3Runner(ACPRunner):
             ps.append(torch.sigmoid(self.stumble_head(StumbleHead.features(S, pick("a"), self.mdp.scan(bp, bR), xi_n, pick("contact_prev")))))
             ys.append(pick("stumble")), terrain.append(self.goal_term.terrain_type[e])
         p, y, terrain = torch.cat(ps), torch.cat(ys), torch.cat(terrain)
-        name = "holdout" if self.stumble_eval_envs_held_out else "train"
+        name = "train"
         out = {f"goal/stumble_{name}_pred_rate": float(p.mean()), f"goal/stumble_{name}_true_rate": float(y.mean())}
         out.update({f"goal/stumble_{name}_{k}": v for k, v in ranking_metrics(p.flatten(), y.flatten() > 0.5).items()})
         for t, tname in enumerate(self.unwrapped.cfg.scene.arena.types):
@@ -263,8 +256,8 @@ class ACPStage3Runner(ACPRunner):
                 out[f"goal/stumble_{name}_pred_rate/{tname}"], out[f"goal/stumble_{name}_true_rate/{tname}"] = float(p[sel].mean()), float(y[sel].mean())
         return out
 
-    def fail_head_windows(self, w: dict, limit: int) -> torch.Tensor:
-        """The failure head is a function of the reference critic features: it trains on the windows of the reference envs only (the world
+    def term_head_windows(self, w: dict, limit: int) -> torch.Tensor:
+        """The termination head is a function of the reference critic features: it trains on the windows of the reference envs only (the world
         model trains on all)."""
         return (~self.is_goal[w["env"]]).nonzero(as_tuple=False).squeeze(-1)[:limit]
 
@@ -372,7 +365,7 @@ class ACPStage3Runner(ACPRunner):
         return torch.cumprod(1 - d, 0)
 
     def _return_ref(self, im: dict, B: int, v_max, graph: bool = False) -> dict:
-        """Discounted imagination return of the reference starts (Vm bootstrap, failure head) as in ``ACPRunner.policy_update``. The forward kinematics of the imagined states are
+        """Discounted imagination return of the reference starts (Vm bootstrap, termination head) as in ``ACPRunner.policy_update``. The forward kinematics of the imagined states are
         the ones the imagination computed (``im["Fk"]``, ``im["fk0"]``): nothing is recomputed here."""
         c, mdp, dev, HZ = self.cfg, self.mdp, self.device, self.horizon
         S0, f0, S, f, phase, origin, xi, xi_n = im["S0"], im["f0"], im["S"], im["f"], im["phase"], im["origin"], im["xi"], im["xi_n"]
@@ -387,13 +380,8 @@ class ACPStage3Runner(ACPRunner):
         r, d, terms = self.reward_term(S_all, qd_start, flat(Fs), rep(phase), rep(origin), flat(As), flat(Aps), flat(Aps2), rep(xi), flat(Ls),
                                        im["lp_hist"], im["ep0"], planned, eta_rew, HZ, fk_all)  # fmt: skip
         G1 = torch.stack(Gs[1:]).flatten(0, 1)
-        X1 = self.critic_input(S_all, flat(Fs), rep(phase), rep(origin), rep(xi_n), G1[:, :3], G1[:, 3], fk_all) if self.head_features_needed() else None  # shared by both heads
+        X1 = self.critic_input(S_all, flat(Fs), rep(phase), rep(origin), rep(xi_n), G1[:, :3], G1[:, 3], fk_all) if c["term_source"] != "analytic" else None
         d, term_stats = self.apply_term_source(d, X1)  # reference starts only; the goal starts keep the analytic fall
-        p_fail_mean = torch.zeros((), device=dev)
-        if c["fail_head"] and self.it >= self.fail_head_start_it + c["fail_head_warmup_iters"]:
-            p_fail = torch.sigmoid(self.fail_head(X1)).clamp(max=c["fail_clip"])
-            d = 1 - (1 - d) * (1 - p_fail)
-            p_fail_mean = p_fail.detach().mean()
         r, d = r.view(HZ, B), d.view(HZ, B)
         alive = self._survival(d, graph)
         c_t = torch.cat((torch.ones(1, B, device=dev), alive[:-1]), 0)
@@ -407,7 +395,6 @@ class ACPStage3Runner(ACPRunner):
             Gc = torch.stack(Gs).flatten(0, 1)
             X = self.critic_input(S_c, f_c, rep1(phase), rep1(origin), rep1(xi_n), Gc[:, :3], Gc[:, 3], fk_c).view(HZ + 1, B, -1)
         terms = {k: v.detach().view(HZ, B).mean() for k, v in terms.items()}
-        terms["p_fail_mean"] = p_fail_mean
         terms.update(term_stats)
         return {"J": J, "X": X, "rews": r.detach(), "dones": d.detach(), "survival": alive[-1].mean().detach(), "terms": terms,
                 "reward": (c_t * r).detach().sum(0).mean() / HZ / mdp.dt, "S_all": S_all, "hard": torch.stack(im["Hard"]).mean()}  # fmt: skip
@@ -475,7 +462,7 @@ class ACPStage3Runner(ACPRunner):
         pick = lambda prefix: {k[len(prefix):]: v for k, v in x.items() if k.startswith(prefix)}  # noqa: E731
         s_m, h_m, s_g, h_g = pick("sm:"), pick("hm:"), pick("sg:"), pick("hg:")
         v_max, v_max_goal = x["e:vmax"], x["e:vmax_goal"]
-        frozen = (self.wm, self.critic, self.critic_goal, self.fail_head, self.stumble_head, *([self.term_head] if self.term_head is not None else []))
+        frozen = (self.wm, self.critic, self.critic_goal, self.stumble_head, *([self.term_head] if self.term_head is not None else []))
         for m_ in frozen:
             for p_ in m_.parameters():
                 p_.requires_grad_(False)
@@ -506,7 +493,7 @@ class ACPStage3Runner(ACPRunner):
         term_means = dict(ret_m["terms"])
         with torch.no_grad():
             term_means["jl_soft"] = self.mdp.joint_violation(ret_m["S_all"][4])[0]
-            term_means["jl_hard_preclamp"] = ret_m["hard"]
+            term_means["jl_hard"] = ret_m["hard"]
         r_comb = (ret_m["reward"] * B_m + ret_g["reward"] * B_g) / (B_m + B_g)
         log = {"goal/imagination_reward": ret_g["reward"], "goal/imagination_survival": ret_g["survival"], "goal/vfs_loss": vg_loss, "goal/return_std": std_g, "ref/return_std": std_m,
                "goal/return_mean": J_g.detach().mean(), "ref/return_mean": J_m.detach().mean(), **ret_g["terms"]}  # fmt: skip

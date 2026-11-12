@@ -17,7 +17,7 @@ class G1AcpStage3V1EnvCfg(AcpStage3EnvCfg):
     Stages 1 / 2 (``acp_cfg.make_*``, masked to the reference envs). No episode cap: the reference envs have to reach 90 % of the clip for the planner
     replay (the longest clip is 18.7 s, the 120 s of the base cfg is only an upper bound); the goal envs have their own 15 s time-out."""
 
-    scene: AcpStage3SceneCfg = field(default_factory=lambda: make_scene_cfg(AcpStage3SceneCfg, num_envs=1024))
+    scene: AcpStage3SceneCfg = field(default_factory=lambda: make_scene_cfg(AcpStage3SceneCfg, num_envs=2048))
     run_name: str = "g1AcpStage3V1"
 
     simplified_collision: bool = True

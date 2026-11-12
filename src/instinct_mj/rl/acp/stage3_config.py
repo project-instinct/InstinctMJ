@@ -19,7 +19,7 @@ class ACPStage3Cfg(ACPRunnerCfg):
     stumble_lr: float = 1e-3
     """ACP-unspecified: learning rate of the stumbling head (the learned force condition of the Stage 3 stumbling penalty in imagination)."""
     stumble_eval_states: int = 16384
-    """Newest buffered transitions of the held-out goal envs the stumbling-head diagnostics are computed on (ACP-unspecified; bounds the cost per log interval)."""
+    """Newest buffered transitions of the goal envs the stumbling-head diagnostics are computed on (ACP-unspecified; bounds the cost per log interval)."""
     stumble_eval_chunk: int = 2048
     """Transitions per chunk (forward kinematics, scan and head) of the stumbling-head diagnostics."""
     return_norm_momentum: float = 0.99

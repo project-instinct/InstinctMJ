@@ -36,7 +36,7 @@ def main() -> None:
     agent = G1AcpStage3RunnerCfg()
     agent.compile, agent.compile_policy = False, False
     agent.planner_success_only = True
-    agent.warmup_steps, agent.buffer_steps, agent.pi_batch, agent.wm_batch, agent.fail_windows = 40, 200, 64, 128, 64
+    agent.warmup_steps, agent.buffer_steps, agent.pi_batch, agent.wm_batch, agent.term_windows = 40, 200, 64, 128, 64
     runner = ACPStage3Runner(vec, agent.to_dict(), log_dir=None, device=device)
     runner.setup_training()
     gt, robot = runner.goal_term, runner.robot

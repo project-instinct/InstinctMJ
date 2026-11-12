@@ -68,8 +68,7 @@ class G1AcpStage2RunnerCfg(G1AcpTrackRunnerCfg):
     train_planner: bool = True
     planner_updates_per_iter: int = 1  # one planner optimizer step per iteration (v1 decision; the ``ACPRunnerCfg`` default is 10, Table S5)
     restart_iteration: bool = True
-    wm_only_iters: int = 0  # the world model and the failure head come from Stage 1
-    fail_head_warmup_iters: int = 0
+    wm_only_iters: int = 0  # the world model comes from Stage 1
 
     def __post_init__(self):
         super().__post_init__()

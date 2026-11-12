@@ -14,7 +14,7 @@ from .rl_cfg import G1AcpTrackRunnerCfg
 class G1AcpStage3RunnerCfg(G1AcpTrackRunnerCfg, ACPStage3Cfg):
     """Stage 3: reference tracking + goal reaching with the planner throughout (eta_obs = eta_rew = 1, paper "Stage 3 uses predicted
     contacts throughout"), the planner keeps training on the partitioned replay. Starts from a Stage 2 checkpoint (``--agent.load-run <abs
-    run dir> --agent.load-checkpoint model_<it>.pt``: actor, normalizer, world model, critic Vm, failure head, planner) and counts its
+    run dir> --agent.load-checkpoint model_<it>.pt``: actor, normalizer, world model, critic Vm, planner) and counts its
     iterations from 0."""
 
     experiment_name: str = "g1AcpStage3V1"
@@ -22,8 +22,9 @@ class G1AcpStage3RunnerCfg(G1AcpTrackRunnerCfg, ACPStage3Cfg):
     contact_source: str = "planner"
     train_planner: bool = True
     restart_iteration: bool = True
-    wm_only_iters: int = 0  # the world model and the failure head come from Stage 2 (they keep training on all data)
-    fail_head_warmup_iters: int = 0
+    planner_updates_per_iter: int = 1  # one planner optimizer step per iteration, as Stage 2
+    wm_only_iters: int = 0  # the world model comes from Stage 2 (it keeps training on all data)
+    lazy_exact_heightmap: bool = False  # Stage 3 keeps the eager auxiliary heightmap (the global default is True)
 
     def __post_init__(self):
         super().__post_init__()

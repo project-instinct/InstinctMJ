@@ -115,7 +115,7 @@ d_on = 2 mm, tau = 1 mm (`sdf_tau`). Switch: env cfg `contact_detect` (default "
 - **Thresholds** `D_ON` = 3 mm for all nine bodies (`sdf_contact.D_ON`). Basis: d_b of the simulated robot (checkpoint `/tmp/acp_eval_v1/new10k`, 256 envs x 600 steps, v3_train10, simplified collision) at the steps where the sensor measures |F_z| > 1 N
   (max over the 4 substeps): median -0.6 .. -0.0 mm, p90 <= 0.7 mm (elbow 0.5, pelvis n/a), p95 <= 1.4 mm, p99 3.6-5.1 mm; accuracy-maximal threshold per body 0.5-1.5 mm; with 3 mm the agreement with the measured 1 N flag is 0.984 over all bodies / 0.955-0.992 per body (feet 0.955-0.959,
   F1 0.97). The reference labels of the data to be trained on have the body within <= 1 mm of the surface in contact frames (v3_train11), so d_on is not widened for old data whose labelled contacts hover 1-2 cm (on v3_train10 the best threshold would be 15-23 mm; agreement of the labels with 3 mm: see the report). Statistics on v3_train11: rerun `calibrate_contact_sdf reference` once it exists.
-- **Where used**: env `measured_contact_flags` (`track_contact_label`, Stage 3 foot / slippage terms, `ACPSimReader.contact()` -> buffer / eval), imagination `step_wm` (the logits of the contact probabilities are `-(d_b - d_on)/tau` of the predicted, clamped state
+- **Where used**: env `measured_contact_flags` (`track_contact_label`, Stage 3 foot / slippage terms, `ACPSimReader.contact()` -> buffer / eval), imagination `step_wm` (the logits of the contact probabilities are `-(d_b - d_on)/tau` of the predicted state
   -> `reward` / Stage 3 / wmres cut as before), Stage 2 hindsight labels (`contact_measurement`: indicator x 2 > the 1 N threshold of `label_episode`; the contact position is the terrain point closest to the nearest sphere of a body in contact).
   Deviation from the paper (Fz > 1 N) for the labels: the planner must predict the contact the tracker is rewarded for; with the distance criterion label, reward and reference sidecar measure the same thing. The stored `contact` of the buffer is the hard flag.
 - **World model**: still predicts the state only; the contact head runs but its bce loss is off (`wm_contact_loss` None -> False in "sdf", log `bce` = 0); `wm_contact_feedback` must be False.
@@ -183,7 +183,7 @@ success (a clip longer than the cap otherwise could not be started earlier than 
 
 ## World-model / critic scan (2026-11-08)
 
-**Reverted to `wm_scan="planner"` (default and all three launchers, 2026-11-08, user decision):** the world model context and the critic / failure-head / termination-head / Vfs inputs use the
+**Reverted to `wm_scan="planner"` (default and all three launchers, 2026-11-08, user decision):** the world model context and the critic / termination-head / Vfs inputs use the
 17 x 11 planner scan (x +-0.8 m, y +-0.5 m, 0.1 m, centred on the pelvis, 187 values) from the true pelvis pose. Reason: the world model has no root height in its state (`invariant_features`), the scan is
 its only terrain input, and the forward-only "wide" scan does not see behind the pelvis. Measured on the labelled contacts of `v3_final` (contact point in the reference pelvis yaw frame, pelvis contacts
 excluded, 267,540 body-frames): x q01 / q05 / q50 / q95 / q99 = -0.30 / -0.20 / 0.04 / 0.39 / 0.53 m; covered by 17 x 11: 99.8 % of the contacts, 99.7 % of the contact frames have all supports
@@ -207,8 +207,7 @@ stalled at the wall. The launchers (`run_stage{1,2,3}.sh`) now follow supermimic
 - **Collection noise**: `action_noise` 0.1 x the per-joint SuperMimic action scale alpha_j = 0.25 effort / (armature (20 pi)^2) on the joint
   target (`runner.sm_action_scale`; hip pitch / waist yaw 0.055 rad, hip roll / knee 0.035, ankle / waist roll-pitch / arms 0.044), instead of a
   uniform 0.05 rad.
-- **World-model windows uniform over the buffer**: `wm_failure_frac 0` (no failure-window oversampling; `failure_window_fix` False),
-  `wm_holdout_envs 0` (every env trains the world model).
+- **World-model windows uniform over the buffer**: no failure-window oversampling and no held-out envs (every env trains the world model).
 - `scan_slope_gradient False`: the scan has no slope gradient (constant terrain height), as there.
 - **No input clipping**: the world-model / critic / head input normalizers (`rays.ScanFloorRunningNorm`, formerly `ClippedRunningNorm`) keep the
   0.05 m std floor of the scan entries but no longer clip the normalized values to +-8 (every entry, as `clip_all`). There it is a plain
@@ -254,7 +253,7 @@ stalled at the wall. The launchers (`run_stage{1,2,3}.sh`) now follow supermimic
 The ACP runner follows the official HybridRobotics/supermimic with no switches for it; the supermimic_vibed-era alternatives are removed (old checkpoints / old option values are not
 supported; `rl/supermimic/` keeps its defaults for the vision / parkour tasks, the ACP runner configures the shared classes). What the runner does now:
 - World model: semi-implicit gencoord integration (`WorldModel.set_integrator("semi_implicit")`), no output de-normalization, GELU (`act=nn.GELU`), complete k-step windows (`sample_complete_windows`;
-  the failure / termination heads, when on, keep their own masked-window batch `wm_failure_frac` / `wm_balance_frac` / `failure_window_fix`), loss = official `WorldModelLearner._compute_losses`
+  the termination head, when on, keeps its own masked-window batch, uniform over the buffer or clip-balanced by `wm_balance_frac`), loss = official `WorldModelLearner._compute_losses`
   on the gencoord loss blocks (`runner.wm_state_error`: root position, root rotation matrix x sqrt(1/2), joint position, joint velocity; weights 1 / nominal^2 with 0.01 / 0.02 / 0.1 / 3.14; mean over the
   valid steps; no root velocity supervision) + the ACP contact BCE.
 - Optimizer: `MuonAdam` (Muon on the hidden Linear weights, fused capturable Adam / AdamW on the rest) for the world model, the actor (AdamW, betas (0.9, 0.95)) and every critic (Vfs too).
@@ -285,7 +284,7 @@ RTX 3090, 2048 envs, Stage 1 launcher config, `/tmp/acp_prof/prof_iter.py` (coll
 | + the three items below | 292 ms | 271 ms | 214 ms | 776 ms (1.29 it/s) |
 
 - **Forward kinematics once per imagined state** (`runner.py`): `_step_wm` returns the FK of the predicted state, which the next step's `_push` / `_observe` / world-model context and the SDF contact use; `mdp.reward` / `soft_termination` / `critic_features` / `link_deviation` take it (`fk=`), the collection and world-model paths are unchanged.
-- **Critic features of the imagined states 1..H computed once** (`X1`, with grad when a learned termination / failure head needs them) and reused, detached, by the critic fit and the bootstraps; only state 0 is computed separately.
+- **Critic features of the imagined states 1..H computed once** (`X1`, with grad when a learned termination head needs them) and reused, detached, by the critic fit and the bootstraps; only state 0 is computed separately.
   Check of both (old vs new bound onto one runner, same seed and restored state; 17 config variants incl. replay, past-clip-end, wmres, no-critic, Stage 3): eager 0.0 difference in every loss / parameter; with compile the actor update is identical and the critic fit differs by fusion noise (parameters <= 1.6e-5 abs).
 - **Reset: the lift reuses the depth of the rejection's last `sim.forward()`** (`events/motion_reference.py`): one forward of all worlds less per reset call; bit-identical written states and `reset_penetration_stats` over 120 compared resets.
 - **Not adopted: the reset penetration depth from the SDF instead of `sim.forward()`** (would save ~25 ms per reset): agreement with MuJoCo's depth 99.84 % (needed >= 99.9 %). Every disagreement is a state with a capsule axis inside a terrain primitive (5.5 % of the noisy reset samples), where MuJoCo's contact reports ~|sdf| - r, i.e. 2 r less than the penetration, or no contact (e.g. a foot capsule 29.7 mm inside reads 9.7 mm); there the SDF is the more correct one, so the current rejection accepts / under-lifts some deeply embedded starts. Kept as it is (results unchanged); code in `/tmp/rb/`.
@@ -355,10 +354,10 @@ Vfs fixed lr 1e-3, trained but excluded from the actor loss for the first 500 it
 planner targets (frozen), analytic goal rewards with sigmoid-relaxed indicator gates, soft fall termination; (c) separate return normalization
 (running std of each regime's discounted return); (d) goal-reaching planner replay: admitted if within 0.5 m (horizontal) at |dz| <= 0.1 m,
 truncated at 0.2 m, partition keyed by (terrain type, level) with eviction of the highest work / distance episode; batches proportional to the
-stored counts; (e) the world model trains on all windows, the failure head on reference windows only.
+stored counts; (e) the world model trains on all windows, the termination head on reference windows only.
 
 Not implemented / simplified (see the `ACP-unspecified` comments): `stumbling` is evaluated on real transitions only (the world model has no force
-output); no learned failure head for goal envs (analytic soft fall only); the first goal-env transition of an imagined rollout assumes the
+output); no learned termination head for goal envs (analytic soft fall only); the first goal-env transition of an imagined rollout assumes the
 previous-step contact equals the current one (slippage); ladder rungs / rails are 4 cm boxes, thinner than the 5 cm heightmap resolution can resolve
 exactly; single process (no multi-GPU).
 

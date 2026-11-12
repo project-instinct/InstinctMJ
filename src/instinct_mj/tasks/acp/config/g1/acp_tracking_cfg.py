@@ -214,7 +214,7 @@ class G1AcpTrackV1EnvCfg(acp_cfg.AcpTrackEnvCfg):
     bootstrapped; the clips are longer than the cap, so the command term does not require a full clip). Use it with the runner options of
     ``scripts/acp/run_stage1.sh`` (SuperMimic clip-end semantics, reset bins)."""
 
-    scene: scene_cfg.AcpSceneCfg = field(default_factory=lambda: make_scene_cfg(scene_cfg.AcpSceneCfg, num_envs=1024))
+    scene: scene_cfg.AcpSceneCfg = field(default_factory=lambda: make_scene_cfg(scene_cfg.AcpSceneCfg, num_envs=4096))
     # v1 default ON (user decision 2026-11-08): the upper body / arms / pelvis / wrists / hands (r = 0.04 sphere) are analytic capsules / spheres, the legs and the authors' foot capsules stay;
     # dynamics and mass properties are unchanged (COLLISION_SIMPLIFY.md). The contact sidecars of the datasets are labelled on the authors' meshes and are NOT relabelled, so the command
     # term is told to accept the mismatch (``allow_label_collision_mismatch``, set below); ``simplified_collision=False`` restores the meshes (and the strict sidecar check).
@@ -238,6 +238,7 @@ class G1AcpStage2V1EnvCfg(G1AcpTrackV1EnvCfg):
     """Stage 2 (``Instinct-ACP-Stage2-G1-v1``): Stage 1 with an episode cap of 20 s. The hindsight planner labels need episodes that progress >= 90 % of a clip and
     the longest clip is 18.7 s (with 10 s, the clips longer than 11.1 s would never produce planner samples). The planner / eta schedules live in the runner."""
 
+    scene: scene_cfg.AcpSceneCfg = field(default_factory=lambda: make_scene_cfg(scene_cfg.AcpSceneCfg, num_envs=2048))
     episode_length_s: float = 20.0
     run_name: str = "g1AcpStage2V1"
 
